@@ -9,41 +9,6 @@ export interface Sprite {
   draw(ctx: CanvasRenderingContext2D, pose: number): void;
 }
 
-export type CharacterPose = 'fours' | 'flight' | 'roll';
-
-/** Placeholder character: a rounded block with eyes, on all fours or flying. */
-const character: Sprite = {
-  draw(ctx, pose) {
-    const w = 2.2;
-    const h = 1.6;
-    ctx.lineWidth = 0.14;
-    ctx.strokeStyle = THEME.outline;
-    ctx.fillStyle = THEME.bodyShirt;
-    roundRect(ctx, -w / 2, -h / 2, w, h, 0.4);
-    ctx.fill();
-    ctx.stroke();
-    // head
-    ctx.fillStyle = THEME.body;
-    ctx.beginPath();
-    ctx.arc(w / 2 + 0.25, pose === 0 ? 0.15 : 0.35, 0.6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    // eye
-    ctx.fillStyle = THEME.outline;
-    ctx.beginPath();
-    ctx.arc(w / 2 + 0.45, pose === 0 ? 0.3 : 0.5, 0.11, 0, Math.PI * 2);
-    ctx.fill();
-    if (pose === 0) {
-      // legs on all fours
-      ctx.fillStyle = THEME.body;
-      for (const lx of [-0.75, -0.35, 0.45, 0.85]) {
-        ctx.fillRect(lx - 0.12, -h / 2 - 0.5, 0.24, 0.55);
-        ctx.strokeRect(lx - 0.12, -h / 2 - 0.5, 0.24, 0.55);
-      }
-    }
-  },
-};
-
 /** Placeholder cartoon boot (godasse), toe pointing right. */
 const boot: Sprite = {
   draw(ctx) {
@@ -66,12 +31,8 @@ const boot: Sprite = {
 };
 
 export const ASSETS = {
-  character,
   boot,
 } as const;
-
-/** Pose index for the character sprite. */
-export const POSE: Record<CharacterPose, number> = { fours: 0, flight: 1, roll: 2 };
 
 export function roundRect(
   ctx: CanvasRenderingContext2D,
