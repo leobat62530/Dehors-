@@ -1,0 +1,28 @@
+# Dehors !
+
+Jeu de distance au coup de pied, pensé comme une mini-app Telegram en portrait. TypeScript + Vite, rendu Canvas 2D, zéro dépendance d'exécution.
+
+## Commandes
+
+```bash
+npm install
+npm run dev        # serveur de développement
+npm test           # tests Vitest
+npm run build      # bundle statique dans dist/
+npm run size       # vérifie le budget de 2 Mo
+npm run sim        # simulateur d'équilibrage (valeurs de balance.ts)
+```
+
+## Organisation
+
+- `src/config/balance.ts` : toutes les valeurs chiffrées du jeu, et nulle part ailleurs.
+- `src/core` : boucle à pas fixe (120 Hz), entrées, générateur aléatoire à graine.
+- `src/game` : physique, coup de pied, course, sauvegarde.
+- `src/ui` : écrans, textes, formats.
+- `src/theme` : palette et sprites placeholder dessinés en code.
+- `src/telegram` : intégration du SDK (phase 5).
+- `tests` : physique, pas fixe, sauvegarde.
+
+## Déploiement
+
+Chaque push sur `main` publie `dist/` sur GitHub Pages via `.github/workflows/pages.yml`. Il faut activer Pages avec la source « GitHub Actions » dans les réglages du dépôt.

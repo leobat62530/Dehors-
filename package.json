@@ -1,0 +1,22 @@
+{
+  "name": "dehors",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dehors ! — jeu de distance au coup de pied, mini-app Telegram",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "sim": "vite-node scripts/sim.ts",
+    "size": "node scripts/check-size.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^6.4.4",
+    "vite-node": "^3.2.4",
+    "vitest": "^3.2.7"
+  }
+}
