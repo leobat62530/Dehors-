@@ -19,6 +19,8 @@ export interface Settings {
   sound: boolean;
   haptics: boolean;
   lang: 'fr' | 'en';
+  /** The tuning lab is unlocked (seven taps on the title). */
+  lab: boolean;
 }
 
 export type GadgetId = (typeof BALANCE.premium.gadgets)[number]['id'];
@@ -134,7 +136,7 @@ export function defaultStats(): Stats {
 }
 
 export function defaultSettings(): Settings {
-  return { sound: true, haptics: true, lang: 'fr' };
+  return { sound: true, haptics: true, lang: 'fr', lab: false };
 }
 
 /** Name as typed, without line breaks, trimmed and cut to the limit; the default when empty. */
@@ -237,6 +239,7 @@ export function migrate(raw: unknown): SaveData {
       sound: rset.sound !== false,
       haptics: rset.haptics !== false,
       lang: rset.lang === 'en' ? 'en' : 'fr',
+      lab: rset.lab === true,
     },
     premium: {
       billets: Math.floor(num(rp.billets)),
