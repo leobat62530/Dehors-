@@ -402,26 +402,23 @@ const skyline: Shape = (ctx, w, h, seed, t) => {
 };
 
 const bridge: Shape = (ctx, w, h, seed, t) => {
+  // Deck on piers, with a tower and its cables.
+  ctx.fillStyle = t.dark;
+  for (const px of [-0.35, 0, 0.35]) ctx.fillRect(px * w - w * 0.03, 0, w * 0.06, h * 0.5);
   ctx.fillStyle = t.base;
   ctx.fillRect(-w / 2, h * 0.5, w, h * 0.1);
-  ctx.fillStyle = t.dark;
-  ctx.fillRect(-w / 2, h * 0.5, w, h * 0.03);
-  for (let i = -1; i <= 1; i++) {
-    ctx.fillStyle = t.dark;
-    ctx.beginPath();
-    ctx.arc(i * w * 0.33, h * 0.5, w * 0.15, Math.PI, 0);
-    ctx.fill();
-  }
+  ctx.fillStyle = t.light;
+  ctx.fillRect(-w / 2, h * 0.6, w, h * 0.02);
   ctx.fillStyle = t.base;
   ctx.fillRect(-w * 0.03, h * 0.5, w * 0.06, h * 0.5);
-  ctx.fillRect(w * 0.3, h * 0.5, w * 0.06, h * 0.5);
-  ctx.strokeStyle = t.light;
+  ctx.fillRect(w * 0.32, h * 0.5, w * 0.06, h * 0.5);
+  ctx.strokeStyle = t.dark;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
     ctx.moveTo(0, h);
     ctx.lineTo(-w * 0.45 + i * w * 0.08, h * 0.6);
-    ctx.moveTo(w * 0.33, h);
+    ctx.moveTo(w * 0.35, h);
     ctx.lineTo(w * 0.05 + i * w * 0.08, h * 0.6);
   }
   ctx.stroke();
@@ -509,12 +506,17 @@ const dune: Shape = (ctx, w, h, seed, t) => {
 };
 
 const wave: Shape = (ctx, w, h) => {
-  ctx.fillStyle = WHITE;
+  // A low crest of foam: a thin white curl over the water, not a mound.
+  ctx.strokeStyle = WHITE;
+  ctx.lineWidth = Math.max(1.5, h * 0.12);
+  ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(-w / 2, 0);
-  ctx.quadraticCurveTo(-w * 0.25, h * 1.8, 0, h * 0.6);
-  ctx.quadraticCurveTo(w * 0.25, 0, w / 2, 0);
-  ctx.fill();
+  ctx.moveTo(-w / 2, h * 0.1);
+  ctx.quadraticCurveTo(-w * 0.2, h * 0.6, 0, h * 0.35);
+  ctx.quadraticCurveTo(w * 0.2, h * 0.1, w / 2, h * 0.3);
+  ctx.stroke();
+  ctx.fillStyle = WHITE;
+  disc(ctx, w * 0.05, h * 0.45, h * 0.12);
 };
 
 const ship: Shape = (ctx, w, h, seed, t) => {
@@ -887,7 +889,7 @@ const COMPOSITIONS: Record<StageId, Composition> = {
   pyrenees: [
     [L(snowMountain, 140, 220, 2.2, 0.9)],
     [L(snowMountain, 100, 150, 1.8, 0.7), L(cable, 100, 130, 1, 0.3)],
-    [L(pine, 60, 100, 0.5, 0.7), L(pump, 40, 50, 2, 0.1), L(rock, 20, 30, 1.6, 0.2)],
+    [L(pine, 60, 100, 0.5, 0.7), L(rock, 20, 30, 1.6, 0.2)],
   ],
   espagne: [
     [L(mountain, 50, 90, 3, 0.5), L(bull, 50, 70, 1.6, 0.25), L(windmill, 70, 90, 0.6, 0.25)],
@@ -900,8 +902,8 @@ const COMPOSITIONS: Record<StageId, Composition> = {
     [L(wave, 30, 45, 2.6, 0.9)],
   ],
   maroc: [
-    [L(mountain, 60, 110, 2.5, 0.6), L(dune, 40, 60, 2.5, 0.3)],
-    [L(minaret, 130, 170, 0.3, 0.3), L(cubes, 50, 70, 2, 0.6), L(block, 40, 60, 2, 0.1)],
+    [L(mountain, 60, 110, 2.5, 0.5), L(dune, 40, 60, 2.5, 0.3)],
+    [L(minaret, 130, 170, 0.3, 0.3), L(cubes, 50, 70, 2, 0.5), L(pump, 40, 50, 2, 0.1)],
     [L(palm, 60, 85, 0.7, 0.5), L(camel, 26, 32, 1.5, 0.2), L(bush, 16, 22, 1.6, 0.1)],
   ],
   algerie: [
@@ -922,7 +924,7 @@ const COMPOSITIONS: Record<StageId, Composition> = {
   somalie: [
     [L(rock, 60, 100, 2.2, 0.4), L(bigRock, 50, 80, 1.6, 0.2), L(ship, 20, 30, 3, 0.1)],
     [L(acacia, 50, 70, 1.3, 0.5), L(rock, 40, 60, 1.5, 0.3)],
-    [L(acacia, 50, 80, 1.3, 0.4), L(wave, 20, 30, 3, 0.2), L(bush, 16, 22, 1.6, 0.2)],
+    [L(acacia, 50, 80, 1.3, 0.4), L(rock, 20, 30, 1.6, 0.2), L(bush, 16, 22, 1.6, 0.2)],
   ],
   congo: [
     [L(mountain, 50, 80, 3, 0.4), L(tree, 60, 90, 1, 0.6)],
