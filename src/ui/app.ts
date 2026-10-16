@@ -57,6 +57,7 @@ import { font, THEME } from '../theme/theme';
 import { FABRIC_COLOURS, GENDERS, HAIRSTYLES, OUTFIT_IDS, OUTFITS } from '../theme/wardrobe';
 import { formatAltitude, formatDistance, formatSpeedKmh } from './format';
 import { drawIcon, type IconId } from './icons';
+import { createLab, type LabPanel, loadLab, resetLab } from './lab';
 import {
   fatalText,
   helmetName,
@@ -141,6 +142,11 @@ export class App implements PointerListener {
   private readonly ghost = new GhostTrajectory();
   private readonly equipment = defaultEquipment();
   private readonly overlay: Overlay | null;
+  private readonly lab: LabPanel | null;
+  private readonly labButton = btn();
+  private readonly pauseLabButton = btn();
+  private titleTaps = 0;
+  private titleTapTime = 0;
   private readonly sounds = new Sounds();
   private readonly trail = new Trail();
   private readonly particles = new Particles();
@@ -324,6 +330,16 @@ export class App implements PointerListener {
     });
     const host = canvas.parentElement;
     this.overlay = host ? createOverlay(host, BALANCE.customisation.nameMaxLength, COUNTRIES, t('nationalityNone')) : null;
+    this.lab = host
+      ? createLab(host, {
+          onChange: () => this.resize(),
+          onReplay: () => {
+            this.restart();
+            this.screen = 'game';
+          },
+        })
+      : null;
+    if (this.save.settings.lab) loadLab();
     if (this.overlay) {
       this.overlay.input.addEventListener('input', () => {
         this.save.profile.name = cleanName(this.overlay!.input.value);
@@ -387,6 +403,22 @@ export class App implements PointerListener {
     return products.length;
   }
 
+  /** Seven quick taps on the title toggle the tuning lab. */
+  private titleTap(): void {
+    const now = performance.now();
+    if (now - this.titleTapTime > 1500) this.titleTaps = 0;
+    this.titleTapTime = now;
+    this.titleTaps++;
+    if (this.titleTaps < 7) return;
+    this.titleTaps = 0;
+    const s = this.save.settings;
+    s.lab = !s.lab;
+    if (s.lab) loadLab();
+    else resetLab();
+    this.persist();
+    this.notice(s.lab ? t('labOn') : t('labOff'), 3);
+  }
+
   private notice(text: string, seconds: number): void {
     this.homeNotice = text;
     this.homeNoticeTime = seconds;
@@ -430,6 +462,8 @@ export class App implements PointerListener {
     Object.assign(this.speedButton, { x: W - 12 - 64, y: H - 24 - 44 - B, w: 64, h: 44 });
 
     // home
+    Object.assign(this.labButton, { x: 12, y: 12 + T, w: 72, h: 34 });
+    Object.assign(this.pauseLabButton, { x: bx + bw / 4, y: H * 0.45 + 80, w: bw / 2, h: 48 });
     Object.assign(this.playButton, { x: bx, y: H * 0.5, w: bw, h: 72 });
     Object.assign(this.homeShopButton, { x: bx, y: H * 0.5 + 86, w: bw / 2 - 6, h: 54 });
     Object.assign(this.giftButton, { x: bx + bw / 2 + 6, y: H * 0.5 + 86, w: bw / 2 - 6, h: 54 });
@@ -466,6 +500,11 @@ export class App implements PointerListener {
       return;
     }
     if (this.screen === 'home') {
+      if (this.save.settings.lab && inside(this.labButton, x, y)) {
+        this.lab?.open();
+        return;
+      }
+      if (y > this.height * 0.06 && y < this.height * 0.2 && Math.abs(x - this.width / 2) < this.width * 0.4) this.titleTap();
       if (inside(this.playButton, x, y)) this.screen = 'game';
       else if (inside(this.homeShopButton, x, y)) this.openShop('home');
       else if (inside(this.giftButton, x, y)) this.claimGift();
@@ -506,6 +545,10 @@ export class App implements PointerListener {
         this.restart();
         this.screen = 'home';
       }
+      return;
+    }
+    if (run.phase === 'flight' && this.paused && this.save.settings.lab && inside(this.pauseLabButton, x, y)) {
+      this.lab?.open();
       return;
     }
     if (run.phase === 'flight' && (this.paused || inside(this.pauseButton, x, y))) {
@@ -1317,6 +1360,7 @@ export class App implements PointerListener {
     ctx.fillText(t('pause'), this.width / 2, this.height * 0.45);
     ctx.font = font('text', 16);
     ctx.fillText(t('resume'), this.width / 2, this.height * 0.45 + 40);
+    if (this.save.settings.lab) this.button(this.pauseLabButton, t('lab'), 'secondary', 15);
   }
 
   // ---- widgets ------------------------------------------------------------
@@ -1469,6 +1513,7 @@ export class App implements PointerListener {
     const gap = this.playButton.y - (panelY + 186);
     this.drawHero(W / 2, this.playButton.y - 6, Math.max(14, Math.min(40, (gap - 10) / 3.1)));
     this.button(this.playButton, t('play'), 'primary', 30);
+    if (this.save.settings.lab) this.button(this.labButton, t('lab'), 'secondary', 13);
     this.button(this.homeShopButton, t('shop'), 'secondary', 16, 'cart');
     const cooldown = giftCooldown(this.save.lastGift, this.now, giftHours(this.save, this.now));
     if (cooldown > 0) {
@@ -2067,6 +2112,9 @@ export class App implements PointerListener {
       s.haptics = !s.haptics;
       this.persist();
     });
+    if (s.lab) {
+      toggle(t('lab'), t('open'), () => this.lab?.open());
+    }
     toggle(t('language'), t(`lang_${s.lang}` as TextKey), () => {
       s.lang = s.lang === 'fr' ? 'en' : 'fr';
       setLang(s.lang);

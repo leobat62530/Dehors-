@@ -72,7 +72,7 @@ describe('customisation', () => {
     expect(s.profile.nationality).toBe('');
     expect(s.trophies).toEqual([]);
     expect(s.stats.wallsBroken).toBe(0);
-    expect(s.settings).toEqual({ sound: true, haptics: true, lang: 'fr' });
+    expect(s.settings).toEqual({ sound: true, haptics: true, lang: 'fr', lab: false });
     expect(s.coins).toBe(12);
     expect(s.upgrades.force).toBe(2);
   });
