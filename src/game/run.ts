@@ -1,5 +1,6 @@
-import { BALANCE, launchSpeed } from '../config/balance';
+import { BALANCE, distanceCoins, launchSpeed } from '../config/balance';
 import { Rng } from '../core/rng';
+import { type BoosterKind, type BouncerKind, type Entity, EntityPool, type ObstacleKind, overlaps, type ProfileId, Spawner } from './entities';
 import type { Aim } from './kick';
 import {
   type Body,
@@ -15,23 +16,38 @@ import { layerIndexAt, stageIndexAt } from './world';
 
 export type Phase = 'aim' | 'swing' | 'flight' | 'ended';
 
-export type EndReason = 'stopped' | 'noProgress';
+export type EndReason = 'stopped' | 'noProgress' | 'wall' | 'fatal';
+
+/** What the character carries into a run. Levels and charges come from the shop. */
+export interface Equipment {
+  kickLevel: number;
+  solesLevel: number;
+  /** Walls the current helmet can still break, 0 when none. */
+  helmetCharges: number;
+  /** Fatal obstacles the lawyer can cancel this run. */
+  lawyerCharges: number;
+}
+
+export function defaultEquipment(): Equipment {
+  return { kickLevel: 0, solesLevel: 0, helmetCharges: 0, lawyerCharges: 0 };
+}
 
 /** Events the run raises for the presentation layer (signs, flashes, haptics). */
 export interface RunEvents {
   onBounce?: BounceHook;
-  /** The character crossed into a new ground stage. */
   onStage?: (stageIndex: number) => void;
-  /** The character entered a new sky layer (up or down). */
   onLayer?: (layerIndex: number, rising: boolean) => void;
-  /** The sound barrier broke. */
   onSoundBarrier?: () => void;
+  onBouncer?: (e: Entity) => void;
+  onBooster?: (e: Entity) => void;
+  onObstacle?: (e: Entity) => void;
+  onWall?: (e: Entity, broken: boolean) => void;
+  onLawyer?: () => void;
 }
 
 /** One run, from the aim to the end screen. Pure game state, no rendering. */
 export class Run {
   readonly body: Body = createBody();
-  /** Previous step's position, for render interpolation. */
   prevX = 0;
   prevY = 0;
 
@@ -45,32 +61,61 @@ export class Run {
   maxAltitude = 0;
   maxSpeed = 0;
   endReason: EndReason | null = null;
+  /** Kind of the obstacle that ended the run, for the end-screen text. */
+  fatalKind: ObstacleKind | null = null;
 
-  /** Current ground stage and sky layer. */
   stageIndex = 0;
   layerIndex = 0;
-  /** Farthest stage and highest layer reached in this run. */
   maxStageIndex = 0;
   maxLayerIndex = 0;
 
-  /** Remaining seconds of the sound-barrier effect, 0 when inactive. */
   barrierTime = 0;
   barrierCount = 0;
   private barrierCooldown = 0;
 
-  /** Index into BALANCE.timeScale.steps chosen by the player. */
   timeScaleIndex = 0;
 
+  /** Coins picked up in this run (what the radar can take). */
+  coins = 0;
+  /** Coins earned from the distance, computed at the end. */
+  distanceCoins = 0;
+  bouncerChain = 0;
+  bestBouncerChain = 0;
+  wallsBroken = 0;
+  /** Remaining helmet charges, decremented per wall. */
+  helmetCharges = 0;
+  lawyerCharges = 0;
+  lawyerUsed = 0;
+
+  /** Booster effect: seconds left of no-drag, and wobble amplitude. */
+  boostTime = 0;
+  boostKind: BoosterKind | null = null;
+  private wobble = 0;
+  /** Extra-drag window (barrel). */
+  private heavyDragTime = 0;
+
+  /** Clinging obstacle. */
+  clingKind: ObstacleKind | null = null;
+  private clingRate = 0;
+  clingTaps = 0;
+  private clingTapTime = 0;
+
+  readonly pool = new EntityPool();
+  private readonly spawner: Spawner;
   private readonly env: Environment = { dragScale: 1, wind: true };
   private bestX = 0;
   private noProgressTime = 0;
+  private lastBounces = 0;
 
   constructor(
     seed: number,
-    private readonly kickLevel: number,
+    readonly equipment: Equipment = defaultEquipment(),
+    readonly profile: ProfileId = 'depart',
     private readonly events: RunEvents = {},
   ) {
     this.rng = new Rng(seed);
+    this.spawner = new Spawner(this.pool, profile);
+    this.reset(seed);
   }
 
   get seed(): number {
@@ -99,6 +144,7 @@ export class Run {
     this.maxAltitude = 0;
     this.maxSpeed = 0;
     this.endReason = null;
+    this.fatalKind = null;
     this.stageIndex = 0;
     this.layerIndex = 0;
     this.maxStageIndex = 0;
@@ -107,12 +153,30 @@ export class Run {
     this.barrierCount = 0;
     this.barrierCooldown = 0;
     this.timeScaleIndex = 0;
+    this.coins = 0;
+    this.distanceCoins = 0;
+    this.bouncerChain = 0;
+    this.bestBouncerChain = 0;
+    this.wallsBroken = 0;
+    this.helmetCharges = this.equipment.helmetCharges;
+    this.lawyerCharges = this.equipment.lawyerCharges;
+    this.lawyerUsed = 0;
+    this.boostTime = 0;
+    this.boostKind = null;
+    this.wobble = 0;
+    this.heavyDragTime = 0;
+    this.clingKind = null;
+    this.clingRate = 0;
+    this.clingTaps = 0;
+    this.clingTapTime = 0;
     this.env.dragScale = 1;
     this.bestX = 0;
     this.noProgressTime = 0;
+    this.lastBounces = 0;
+    this.spawner.reset();
+    this.spawner.advance(this.rng, 0, 0);
   }
 
-  /** Release of the boot: start the swing if the drag was strong enough. Returns true if kicked. */
   release(): boolean {
     this.aiming = false;
     if (this.phase !== 'aim') return false;
@@ -125,9 +189,24 @@ export class Run {
     return true;
   }
 
-  /** Cycle the time accelerator: ×1 → ×2 → ×5 → ×10 → ×1. */
   cycleTimeScale(maxIndex: number = BALANCE.timeScale.freeMaxIndex): void {
     this.timeScaleIndex = this.timeScaleIndex >= maxIndex ? 0 : this.timeScaleIndex + 1;
+  }
+
+  /** A tap during flight: three quick ones shake off a clinging obstacle. Returns true when it detached. */
+  tap(): boolean {
+    if (this.phase !== 'flight' || !this.clingKind) return false;
+    const C = BALANCE.clinger;
+    if (this.time - this.clingTapTime > C.tapWindowSeconds) this.clingTaps = 0;
+    this.clingTapTime = this.time;
+    this.clingTaps++;
+    if (this.clingTaps >= C.taps) {
+      this.clingKind = null;
+      this.clingRate = 0;
+      this.clingTaps = 0;
+      return true;
+    }
+    return false;
   }
 
   step(dt: number): void {
@@ -141,7 +220,7 @@ export class Run {
       case 'swing':
         this.swingTime += dt;
         if (this.swingTime >= BALANCE.kick.swingSeconds) {
-          launch(this.body, launchSpeed(this.aim.power, this.kickLevel), this.aim.angle);
+          launch(this.body, launchSpeed(this.aim.power, this.equipment.kickLevel), this.aim.angle);
           this.phase = 'flight';
         }
         return;
@@ -149,17 +228,143 @@ export class Run {
         this.time += dt;
         this.updateEffects(dt);
         stepBody(this.body, dt, this.events.onBounce, this.env);
+        this.collide(dt);
         this.track(dt);
+        this.spawner.advance(this.rng, this.body.x, this.body.y);
+        this.pool.cull(this.body.x - 200);
         return;
     }
   }
 
   private updateEffects(dt: number): void {
-    if (this.barrierTime > 0) {
-      this.barrierTime = Math.max(0, this.barrierTime - dt);
-      if (this.barrierTime === 0) this.env.dragScale = 1;
-    }
+    if (this.barrierTime > 0) this.barrierTime = Math.max(0, this.barrierTime - dt);
     if (this.barrierCooldown > 0) this.barrierCooldown = Math.max(0, this.barrierCooldown - dt);
+    if (this.boostTime > 0) {
+      this.boostTime = Math.max(0, this.boostTime - dt);
+      if (this.wobble > 0) this.body.vy += Math.sin(this.time * 9) * this.wobble * 12 * dt;
+      if (this.boostTime === 0) {
+        this.boostKind = null;
+        this.wobble = 0;
+      }
+    }
+    if (this.heavyDragTime > 0) this.heavyDragTime = Math.max(0, this.heavyDragTime - dt);
+    // Drag: none during the sound barrier or a booster, doubled under a barrel.
+    this.env.dragScale = this.barrierTime > 0 || this.boostTime > 0 ? 0 : this.heavyDragTime > 0 ? 2 : 1;
+
+    if (this.clingKind) {
+      const keep = Math.pow(1 - this.clingRate, dt);
+      this.body.vx *= keep;
+      this.body.vy *= keep;
+    }
+    for (const e of this.pool.items) if (e.active && e.used) e.usedTime += dt;
+  }
+
+  private collide(dt: number): void {
+    const b = this.body;
+    const P = BALANCE.player;
+    const immune = this.barrierTime > 0;
+    const bounced = b.bounces !== this.lastBounces;
+    this.lastBounces = b.bounces;
+    if (b.y > 0 && !b.rolling) this.bouncerChainTick(dt);
+
+    for (const e of this.pool.items) {
+      if (!e.active || e.used) continue;
+      if (e.type === 'wall') {
+        if (this.prevX < e.x && b.x >= e.x && b.y < e.h && b.y < BALANCE.altitude.tropopause) this.hitWall(e);
+        continue;
+      }
+      if (e.kind === 'trampoline') {
+        if (bounced && Math.abs(b.x - e.x) < e.w / 2 + P.width / 2) this.hitBouncer(e);
+        continue;
+      }
+      if (!overlaps(b.x, b.y, P.width, P.height, e)) continue;
+      if (e.type === 'bouncer') this.hitBouncer(e);
+      else if (e.type === 'booster') this.hitBooster(e);
+      else if (e.type === 'obstacle' && !immune) this.hitObstacle(e);
+      if (this.phase === 'ended') return;
+    }
+  }
+
+  private chainTimer = 0;
+  private bouncerChainTick(dt: number): void {
+    this.chainTimer += dt;
+    if (this.chainTimer > 6) this.bouncerChain = 0;
+  }
+
+  private hitBouncer(e: Entity): void {
+    const def = BALANCE.bouncers[e.kind as BouncerKind];
+    const gain = def.gain * Math.pow(BALANCE.solesGainPerLevel, this.equipment.solesLevel);
+    const b = this.body;
+    b.vy = Math.max(b.vy, 0) + gain;
+    b.rolling = false;
+    b.onGround = false;
+    if (b.y <= 0) b.y = 0.01;
+    e.used = true;
+    this.chainTimer = 0;
+    this.bouncerChain++;
+    if (this.bouncerChain > this.bestBouncerChain) this.bestBouncerChain = this.bouncerChain;
+    this.events.onBouncer?.(e);
+  }
+
+  private hitBooster(e: Entity): void {
+    const fx = BALANCE.boosterEffects[e.kind as BoosterKind];
+    e.used = true;
+    this.coins += fx.coins;
+    if (fx.speed !== 1) {
+      this.body.vx *= fx.speed;
+      this.body.vy *= fx.speed;
+    }
+    if (fx.seconds > 0) {
+      this.boostTime = Math.max(this.boostTime, fx.seconds);
+      this.boostKind = e.kind as BoosterKind;
+      this.wobble = fx.wobble;
+    }
+    this.events.onBooster?.(e);
+  }
+
+  private hitObstacle(e: Entity): void {
+    const kind = e.kind as ObstacleKind;
+    const fx = BALANCE.obstacleEffects[kind];
+    e.used = true;
+    if (fx.fatal) {
+      if (this.lawyerCharges > 0) {
+        this.lawyerCharges--;
+        this.lawyerUsed++;
+        this.events.onLawyer?.();
+      } else {
+        this.fatalKind = kind;
+        this.events.onObstacle?.(e);
+        this.end('fatal');
+        return;
+      }
+    }
+    if (fx.cling > 0 && !this.clingKind) {
+      this.clingKind = kind;
+      this.clingRate = fx.cling;
+      this.clingTaps = 0;
+    }
+    if (fx.slow > 0) {
+      this.body.vx *= 1 - fx.slow;
+      this.body.vy *= 1 - fx.slow;
+    }
+    if (fx.push > 0) this.body.vy = -Math.abs(this.body.vy) - fx.push;
+    if (fx.coinLoss > 0) this.coins = Math.floor(this.coins * (1 - fx.coinLoss));
+    if (fx.dragSeconds > 0) this.heavyDragTime = Math.max(this.heavyDragTime, fx.dragSeconds);
+    this.events.onObstacle?.(e);
+  }
+
+  private hitWall(e: Entity): void {
+    e.used = true;
+    if (this.helmetCharges > 0) {
+      this.helmetCharges--;
+      this.wallsBroken++;
+      this.body.vx *= BALANCE.walls.speedKept;
+      this.events.onWall?.(e, true);
+    } else {
+      this.body.x = e.x - 0.5;
+      this.events.onWall?.(e, false);
+      this.end('wall');
+    }
   }
 
   private track(dt: number): void {
@@ -168,7 +373,6 @@ export class Run {
     if (b.y > this.maxAltitude) this.maxAltitude = b.y;
     if (v > this.maxSpeed) this.maxSpeed = v;
 
-    // Sound barrier: a speed, never a place.
     const SB = BALANCE.soundBarrier;
     if (v >= SB.speed && this.barrierTime === 0 && this.barrierCooldown === 0 && !b.rolling) {
       b.vx *= SB.boost;
@@ -176,11 +380,9 @@ export class Run {
       this.barrierTime = SB.seconds;
       this.barrierCooldown = SB.seconds + SB.cooldown;
       this.barrierCount++;
-      this.env.dragScale = 0;
       this.events.onSoundBarrier?.();
     }
 
-    // Country from x only, layer from y only.
     const stage = stageIndexAt(b.x);
     if (stage !== this.stageIndex) {
       this.stageIndex = stage;
@@ -202,6 +404,7 @@ export class Run {
       this.noProgressTime += dt;
     }
 
+    if (this.phase !== 'flight') return;
     if (b.onGround && v < BALANCE.end.minSpeed) this.end('stopped');
     else if (this.noProgressTime >= BALANCE.end.noProgressSeconds) this.end('noProgress');
   }
@@ -209,8 +412,10 @@ export class Run {
   private end(reason: EndReason): void {
     this.phase = 'ended';
     this.endReason = reason;
+    this.distanceCoins = distanceCoins(this.distance);
     this.body.vx = 0;
     this.body.vy = 0;
     this.timeScaleIndex = 0;
+    this.clingKind = null;
   }
 }
