@@ -34,38 +34,95 @@ const wings = (ctx: CanvasRenderingContext2D, w: number, y: number, flap: number
   ctx.stroke();
 };
 
+/** A bird in profile, flying left to right: body, head, beak, tail and one flapping wing. */
+const bird = (ctx: CanvasRenderingContext2D, e: Entity, t: number, body: string, wing: string, beak: string): void => {
+  outline(ctx);
+  const flap = Math.sin(t * 14 + e.seed * 6);
+  const cy = e.h * 0.5;
+  const bw = e.w * 0.36;
+  const bh = e.h * 0.24;
+  // tail
+  ctx.fillStyle = wing;
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.6, cy);
+  ctx.lineTo(-bw * 1.4, cy + bh * 0.8);
+  ctx.lineTo(-bw * 1.4, cy - bh * 0.4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // body
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.ellipse(0, cy, bw, bh, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  // head and beak
+  circle(ctx, bw * 0.85, cy + bh * 0.5, bh * 0.75);
+  ctx.fillStyle = beak;
+  ctx.beginPath();
+  ctx.moveTo(bw * 0.85 + bh * 0.6, cy + bh * 0.6);
+  ctx.lineTo(bw * 0.85 + bh * 1.5, cy + bh * 0.35);
+  ctx.lineTo(bw * 0.85 + bh * 0.6, cy + bh * 0.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = THEME.outline;
+  ctx.beginPath();
+  ctx.arc(bw * 0.95, cy + bh * 0.65, 0.07, 0, Math.PI * 2);
+  ctx.fill();
+  // wing, pivoting on the back
+  ctx.fillStyle = wing;
+  ctx.beginPath();
+  ctx.moveTo(-bw * 0.2, cy + bh * 0.3);
+  ctx.quadraticCurveTo(-bw * 0.3, cy + bh * (1.2 + flap * 1.6), bw * 0.4, cy + bh * (1.4 + flap * 2.2));
+  ctx.quadraticCurveTo(bw * 0.3, cy + bh * (0.6 + flap * 0.8), bw * 0.3, cy + bh * 0.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+};
+
 const BOUNCERS: Record<string, Draw> = {
   pigeon(ctx, e, t) {
-    outline(ctx);
-    ctx.fillStyle = '#9aa3ad';
-    circle(ctx, 0, e.h * 0.5, e.h * 0.4);
-    ctx.fillStyle = THEME.outline;
-    circle(ctx, e.h * 0.3, e.h * 0.7, 0.06);
-    ctx.strokeStyle = '#7d8790';
-    wings(ctx, e.w, e.h * 0.55, Math.sin(t * 18 + e.seed * 6) * 0.5);
+    bird(ctx, e, t, '#9aa3ad', '#6f7985', '#f2b134');
   },
   ballon(ctx, e, t) {
     outline(ctx);
     const hue = Math.floor(e.seed * 360);
-    ctx.fillStyle = `hsl(${hue} 85% 60%)`;
     const bob = Math.sin(t * 2 + e.seed * 9) * 0.1;
+    const rx = e.w * 0.45;
+    const ry = e.h * 0.4;
+    const cy = e.h * 0.62 + bob;
+    ctx.fillStyle = `hsl(${hue} 85% 60%)`;
     ctx.beginPath();
-    ctx.ellipse(0, e.h * 0.62 + bob, e.w * 0.45, e.h * 0.4, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, cy, rx, ry, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    ctx.fillStyle = `hsl(${hue} 85% 45%)`;
     ctx.beginPath();
-    ctx.moveTo(0, e.h * 0.2 + bob);
-    ctx.lineTo(0, 0);
+    ctx.ellipse(0, cy, rx, ry, 0, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.lineTo(0, cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(-rx * 0.35, cy + ry * 0.4, rx * 0.22, ry * 0.3, -0.5, 0, Math.PI * 2);
+    ctx.fill();
+    // knot and string
+    ctx.fillStyle = `hsl(${hue} 85% 45%)`;
+    ctx.beginPath();
+    ctx.moveTo(-0.12, cy - ry);
+    ctx.lineTo(0.12, cy - ry);
+    ctx.lineTo(0, cy - ry - 0.18);
+    ctx.closePath();
+    ctx.fill();
+    ctx.lineWidth = 0.08;
+    ctx.beginPath();
+    ctx.moveTo(0, cy - ry - 0.18);
+    ctx.quadraticCurveTo(0.2, (cy - ry) * 0.5, 0, 0);
     ctx.stroke();
   },
   mouette(ctx, e, t) {
-    outline(ctx);
-    ctx.fillStyle = '#ffffff';
-    circle(ctx, 0, e.h * 0.5, e.h * 0.35);
-    ctx.fillStyle = '#f2b134';
-    ctx.fillRect(e.h * 0.3, e.h * 0.42, 0.35, 0.14);
-    ctx.strokeStyle = '#dcdcdc';
-    wings(ctx, e.w, e.h * 0.55, Math.sin(t * 10 + e.seed * 6) * 0.6);
+    bird(ctx, e, t, '#ffffff', '#d9dde3', '#f2b134');
   },
   drone(ctx, e, t) {
     outline(ctx);
@@ -518,16 +575,31 @@ export function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, t: number, 
       ctx.translate(0, k * 2.5);
     }
     ctx.translate(0, r + bob);
-    ctx.fillStyle = THEME.accent;
+    // A coin seen slightly from the side: rim, face, embossed star and a sweeping shine.
+    ctx.lineWidth = 0.12;
+    ctx.strokeStyle = '#8c6508';
+    ctx.fillStyle = '#d99a1c';
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fill();
-    ctx.lineWidth = 0.12;
-    ctx.strokeStyle = '#b8860b';
     ctx.stroke();
-    ctx.fillStyle = '#fff2b0';
+    ctx.fillStyle = THEME.accent;
     ctx.beginPath();
-    ctx.arc(-r * 0.25, r * 0.25, r * 0.28, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 0.76, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#d99a1c';
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (i * Math.PI) / 5 + Math.PI / 2;
+      const rr = i % 2 === 0 ? r * 0.5 : r * 0.22;
+      ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    ctx.closePath();
+    ctx.fill();
+    const shine = ((t * 0.9 + e.seed) % 1) * 2 - 1;
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(shine * r * 0.5, 0, r * 0.12, r * 0.85, 0.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
     return;

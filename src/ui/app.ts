@@ -47,15 +47,16 @@ import { defaultEquipment, Run } from '../game/run';
 import { cleanName, defaultSave, type GadgetId, type KeyValueStore, loadSave, type SaveData, writeSave } from '../game/save';
 import { GhostTrajectory } from '../game/trajectory';
 import { awardTrophies, TROPHIES, type TrophyDef, trophyProgress } from '../game/trophies';
-import { LAYERS, STAGES, stageAt } from '../game/world';
+import { LAYERS, type LayerId, STAGES, type StageId, stageAt } from '../game/world';
 import { ASSETS, roundRect } from '../theme/assets';
 import { CHARACTER_POSE, drawCharacter } from '../theme/character';
 import { drawEntity } from '../theme/entitySprites';
 import { LAYER_PALETTES, STAGE_PALETTES } from '../theme/palettes';
-import { drawBorderSign, drawLayerSign, drawScenery, drawStars } from '../theme/scenery';
+import { drawBorderSign, drawClouds, drawGround, drawLayerSign, drawScenery, drawStars, drawSun } from '../theme/scenery';
 import { font, THEME } from '../theme/theme';
 import { FABRIC_COLOURS, GENDERS, HAIRSTYLES, OUTFIT_IDS, OUTFITS } from '../theme/wardrobe';
 import { formatAltitude, formatDistance, formatSpeedKmh } from './format';
+import { drawIcon, type IconId } from './icons';
 import {
   fatalText,
   helmetName,
@@ -169,6 +170,7 @@ export class App implements PointerListener {
   private camY = 0;
   private zoom = 1;
   private shake = 0;
+  private readonly gradients = new Map<string, CanvasGradient>();
 
   // pointer
   private dragStartX = 0;
@@ -427,12 +429,12 @@ export class App implements PointerListener {
 
     // home
     Object.assign(this.playButton, { x: bx, y: H * 0.5, w: bw, h: 72 });
-    Object.assign(this.homeShopButton, { x: bx, y: H * 0.5 + 86, w: bw / 2 - 6, h: 48 });
-    Object.assign(this.giftButton, { x: bx + bw / 2 + 6, y: H * 0.5 + 86, w: bw / 2 - 6, h: 48 });
+    Object.assign(this.homeShopButton, { x: bx, y: H * 0.5 + 86, w: bw / 2 - 6, h: 54 });
+    Object.assign(this.giftButton, { x: bx + bw / 2 + 6, y: H * 0.5 + 86, w: bw / 2 - 6, h: 54 });
     const sw = (bw - 18) / 4;
-    this.menuButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (sw + 6), y: H * 0.5 + 148, w: sw, h: 56 }));
+    this.menuButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (sw + 6), y: H * 0.5 + 148, w: sw, h: 62 }));
     const dw = (bw - 12) / 3;
-    this.dailyButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (dw + 6), y: H * 0.5 + 212, w: dw, h: 44 }));
+    this.dailyButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (dw + 6), y: H * 0.5 + 222, w: dw, h: 58 }));
 
     // wheel
     Object.assign(this.spinButton, { x: bx, y: H - 136 - B, w: bw, h: 56 });
@@ -868,7 +870,6 @@ export class App implements PointerListener {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
     const run = this.run;
-    this.drawSky();
     const b = run.body;
     const px = run.prevX + (b.x - run.prevX) * alpha;
     const py = run.prevY + (b.y - run.prevY) * alpha;
@@ -878,8 +879,9 @@ export class App implements PointerListener {
     const originX = W * BALANCE.render.playerScreenX - this.camX * scale + shakeX;
     const originY = H * BALANCE.render.playerScreenY + this.camY * scale + shakeY;
 
+    this.drawSky(originY);
     drawScenery(ctx, W, this.camX, this.camY, this.zoom, originY);
-    this.drawGround(originX, originY, scale);
+    drawGround(ctx, W, H, originX, originY, scale, this.camX);
     if (this.screen === 'game' && run.phase === 'aim' && run.aiming) this.drawGhost(originX, originY, scale);
     this.drawEntities(originX, originY, scale);
     this.particles.draw(ctx, originX, originY, scale);
@@ -924,28 +926,27 @@ export class App implements PointerListener {
   }
 
   /** Sky of the stage under x below the tropopause, sky of the layer above, blended near the boundary. */
-  private drawSky(): void {
+  private drawSky(originY: number): void {
     const ctx = this.ctx;
     const W = this.width;
     const H = this.height;
-    const stage = STAGE_PALETTES[stageAt(this.camX).id];
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, stage.skyTop);
-    g.addColorStop(1, stage.skyBottom);
-    ctx.fillStyle = g;
+    const stageId = stageAt(this.camX).id;
+    ctx.fillStyle = this.skyGradient(stageId, H);
     ctx.fillRect(0, 0, W, H);
 
     const y = this.camY;
     const tropo = BALANCE.altitude.tropopause;
     // Fade the layer sky in over the last fifth of the troposphere.
     const blend = Math.min(1, Math.max(0, (y - tropo * 0.8) / (tropo * 0.2)));
+    if (blend < 1) {
+      drawSun(ctx, W, H, this.camX, stageId);
+      drawClouds(ctx, W, Math.min(H, originY), this.camX, this.zoom, stageId);
+    }
     if (blend > 0) {
-      const layer = LAYER_PALETTES[(LAYERS[this.run.layerIndex] ?? LAYERS[0]!).id];
-      const lg = ctx.createLinearGradient(0, 0, 0, H);
-      lg.addColorStop(0, layer.skyTop);
-      lg.addColorStop(1, layer.skyBottom);
+      const layerId = (LAYERS[this.run.layerIndex] ?? LAYERS[0]!).id;
+      const layer = LAYER_PALETTES[layerId];
       ctx.globalAlpha = blend;
-      ctx.fillStyle = lg;
+      ctx.fillStyle = this.skyGradient(layerId, H);
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
       drawStars(ctx, W, H, layer.stars * blend, this.camX);
@@ -956,6 +957,21 @@ export class App implements PointerListener {
       ctx.ellipse(W / 2, curveTop + W * 1.5, W * 1.6, W * 1.5, 0, Math.PI, 0);
       ctx.fill();
     }
+  }
+
+  /** Vertical sky gradient of a stage or layer, built once per canvas height so the loop allocates nothing. */
+  private skyGradient(id: StageId | LayerId, H: number): CanvasGradient {
+    const key = `${id}:${H}`;
+    let g = this.gradients.get(key);
+    if (!g) {
+      const p = id in STAGE_PALETTES ? STAGE_PALETTES[id as StageId] : LAYER_PALETTES[id as LayerId];
+      g = this.ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, p.skyTop);
+      g.addColorStop(1, p.skyBottom);
+      if (this.gradients.size > 64) this.gradients.clear();
+      this.gradients.set(key, g);
+    }
+    return g;
   }
 
   private drawEntities(ox: number, oy: number, scale: number): void {
@@ -1000,29 +1016,6 @@ export class App implements PointerListener {
     }
   }
 
-  private drawGround(ox: number, oy: number, scale: number): void {
-    const ctx = this.ctx;
-    const W = this.width;
-    const H = this.height;
-    if (oy < H) {
-      const palette = STAGE_PALETTES[stageAt(this.camX).id];
-      ctx.fillStyle = palette.ground;
-      ctx.fillRect(0, oy, W, H - oy);
-      ctx.fillStyle = palette.groundDark;
-      ctx.fillRect(0, oy, W, Math.max(3, 0.6 * scale));
-      // distance ticks give a sense of speed until the parallax arrives
-      const spacing = BALANCE.render.groundTickSpacing;
-      const first = Math.floor(-ox / scale / spacing) * spacing;
-      const last = (W - ox) / scale;
-      ctx.fillStyle = THEME.groundLine;
-      for (let x = first; x <= last; x += spacing) {
-        const sx = ox + x * scale;
-        const big = Math.round(x) % (spacing * 10) === 0;
-        ctx.fillRect(sx - 1, oy, 2, big ? 16 : 7);
-      }
-    }
-  }
-
   private drawGhost(ox: number, oy: number, scale: number): void {
     const ctx = this.ctx;
     const g = this.ghost;
@@ -1052,7 +1045,7 @@ export class App implements PointerListener {
       const angle = b.rolling ? -run.time * b.vx * 0.6 : Math.atan2(b.vy, Math.max(1, b.vx)) * 0.8;
       ctx.rotate(angle);
     }
-    drawCharacter(ctx, this.save.profile, pose);
+    drawCharacter(ctx, this.save.profile, pose, run.time);
     ctx.restore();
   }
 
@@ -1279,19 +1272,37 @@ export class App implements PointerListener {
 
   // ---- widgets ------------------------------------------------------------
 
-  private button(b: Button, label: string, style: 'primary' | 'secondary' | 'disabled', size = 18): void {
+  private button(b: Button, label: string, style: 'primary' | 'secondary' | 'disabled', size = 18, icon?: IconId): void {
     const ctx = this.ctx;
+    const r = Math.min(18, b.h / 3);
+    const lift = style === 'disabled' ? 2 : 5;
+    // A solid drop under the face gives the flat cartoon buttons some thickness.
+    ctx.fillStyle = style === 'primary' ? '#b8860b' : style === 'secondary' ? '#0f1018' : 'rgba(27,29,42,0.4)';
+    roundRect(ctx, b.x, b.y + lift, b.w, b.h, r);
+    ctx.fill();
     ctx.fillStyle = style === 'primary' ? THEME.accent : style === 'secondary' ? THEME.ui : 'rgba(27,29,42,0.5)';
-    roundRect(ctx, b.x, b.y, b.w, b.h, Math.min(18, b.h / 3));
+    roundRect(ctx, b.x, b.y, b.w, b.h - 2, r);
     ctx.fill();
     ctx.lineWidth = 3;
     ctx.strokeStyle = style === 'primary' ? THEME.outline : style === 'secondary' ? THEME.accent : 'rgba(255,255,255,0.15)';
     ctx.stroke();
-    ctx.fillStyle = style === 'primary' ? THEME.ui : style === 'secondary' ? THEME.uiText : THEME.uiTextSoft;
+    ctx.fillStyle = style === 'primary' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.08)';
+    roundRect(ctx, b.x + 8, b.y + 4, b.w - 16, Math.max(3, b.h * 0.14), 3);
+    ctx.fill();
+    const colour = style === 'primary' ? THEME.ui : style === 'secondary' ? THEME.uiText : THEME.uiTextSoft;
+    ctx.fillStyle = colour;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = font('display', size);
-    ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2, b.w - 12);
+    if (icon) {
+      // Icon above the label.
+      drawIcon(ctx, icon, b.x + b.w / 2, b.y + b.h * 0.34, Math.min(26, b.h * 0.36), colour);
+      ctx.fillStyle = colour;
+      ctx.font = font('display', Math.min(size, b.h * 0.24));
+      ctx.fillText(label, b.x + b.w / 2, b.y + b.h * 0.78, b.w - 10);
+    } else {
+      ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2 - 1, b.w - 12);
+    }
   }
 
   /** Small selectable pill. */
@@ -1344,7 +1355,8 @@ export class App implements PointerListener {
     const ctx = this.ctx;
     const W = this.width;
     const H = this.height;
-    ctx.fillStyle = THEME.shade;
+    // The scenery stays visible: only a light veil so the text reads.
+    ctx.fillStyle = 'rgba(10,14,40,0.18)';
     ctx.fillRect(0, 0, W, H);
 
     ctx.textAlign = 'center';
@@ -1360,7 +1372,7 @@ export class App implements PointerListener {
     const panelW = Math.min(W - 32, 380);
     const panelX = (W - panelW) / 2;
     const panelY = H * 0.22;
-    ctx.fillStyle = THEME.ui;
+    ctx.fillStyle = 'rgba(27,29,42,0.88)';
     roundRect(ctx, panelX, panelY, panelW, 186, 20);
     ctx.fill();
     ctx.font = font('display', 16);
@@ -1404,13 +1416,16 @@ export class App implements PointerListener {
       ctx.textBaseline = 'top';
     }
 
+    // The character stands between the panel and the play button, as big as the gap allows.
+    const gap = this.playButton.y - (panelY + 186);
+    this.drawHero(W / 2, this.playButton.y - 6, Math.max(14, Math.min(40, (gap - 10) / 3.1)));
     this.button(this.playButton, t('play'), 'primary', 30);
-    this.button(this.homeShopButton, t('shop'), 'secondary', 17);
+    this.button(this.homeShopButton, t('shop'), 'secondary', 16, 'cart');
     const cooldown = giftCooldown(this.save.lastGift, this.now, giftHours(this.save, this.now));
     if (cooldown > 0) {
       this.button(this.giftButton, `${t('giftIn')} ${formatCooldown(cooldown)}`, 'disabled', 12);
     } else {
-      this.button(this.giftButton, `${t('gift')} +${giftAmount(this.save.level)} ●`, 'secondary', 14);
+      this.button(this.giftButton, `${t('gift')} +${giftAmount(this.save.level)} ●`, 'secondary', 12, 'gift');
     }
     if (this.giftFlash > 0) {
       ctx.textAlign = 'center';
@@ -1422,14 +1437,26 @@ export class App implements PointerListener {
       ctx.globalAlpha = 1;
     }
     const labels: string[] = [t('customize'), t('trophies'), t('profiles'), t('settings')];
-    this.menuButtons.forEach((b, i) => this.button(b, labels[i] ?? '', 'secondary', 11));
+    const icons: IconId[] = ['shirt', 'trophy', 'person', 'gear'];
+    this.menuButtons.forEach((b, i) => this.button(b, labels[i] ?? '', 'secondary', 10, icons[i]));
 
     // Daily loops: wheel, challenges, premium. A dot marks what is waiting.
     const wheelReady = wheelAvailable(this.save, this.now);
     const claimable = this.claimableChallenges();
-    this.button(this.dailyButtons[0]!, t('wheel'), wheelReady ? 'primary' : 'secondary', 13);
-    this.button(this.dailyButtons[1]!, claimable > 0 ? `${t('challenges')} (${claimable})` : t('challenges'), claimable > 0 ? 'primary' : 'secondary', 13);
-    this.button(this.dailyButtons[2]!, `${t('billets')} 🎟`, starterAvailable(this.save, this.now) ? 'primary' : 'secondary', 13);
+    this.button(this.dailyButtons[0]!, t('wheel'), wheelReady ? 'primary' : 'secondary', 11, 'wheel');
+    this.button(this.dailyButtons[1]!, claimable > 0 ? `${t('challenges')} (${claimable})` : t('challenges'), claimable > 0 ? 'primary' : 'secondary', 11, 'flag');
+    this.button(this.dailyButtons[2]!, t('billets'), starterAvailable(this.save, this.now) ? 'primary' : 'secondary', 11, 'ticket');
+  }
+
+  /** The player's character standing proud, feet at (x, y), `s` px per metre. */
+  private drawHero(x: number, y: number, s: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s, -s);
+    ctx.translate(0, 1.3);
+    drawCharacter(ctx, this.save.profile, CHARACTER_POSE.stand, this.now / 1000);
+    ctx.restore();
   }
 
   private claimableChallenges(): number {
