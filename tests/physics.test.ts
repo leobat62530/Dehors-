@@ -85,6 +85,41 @@ describe('flight physics', () => {
     expect(b.x).toBeGreaterThan(vacuum * 0.5);
   });
 
+  it('a fall from high up is held at the terminal speed and glides down at an angle', () => {
+    const P = BALANCE.physics;
+    const b = createBody();
+    b.y = 2000;
+    b.vx = 80;
+    b.vy = 0;
+    b.onGround = false;
+    let slowest = 0;
+    let t = 0;
+    while (b.bounces === 0 && t < 300) {
+      stepBody(b, DT);
+      if (b.vy < slowest) slowest = b.vy;
+      t += DT;
+    }
+    expect(b.bounces).toBe(1);
+    expect(-slowest).toBeLessThan(P.fallTerminalSpeed * 1.05);
+    // Just before touching down the descent is a slope, not a plumb line.
+    expect(t).toBeGreaterThan(2000 / P.fallTerminalSpeed);
+    expect(b.x).toBeGreaterThan(2000 * 0.5);
+  });
+
+  it('a long fall never ends the run in the air: the character always lands first', () => {
+    const run = new Run(3, eq(0));
+    run.emptyWorld();
+    kick(run, 1, 43);
+    while (run.phase !== 'flight') run.step(DT);
+    run.body.y = 5000;
+    run.body.vx = 0.001;
+    run.body.vy = 0;
+    const steps = playToEnd(run, 600);
+    expect(run.phase).toBe('ended');
+    expect(steps * DT).toBeGreaterThan(BALANCE.end.noProgressSeconds * 5);
+    expect(run.body.y).toBe(0);
+  });
+
   it('bounces lose energy, then the body rolls and the run ends', () => {
     const run = new Run(7, eq(0));
     kick(run, 1, 43);

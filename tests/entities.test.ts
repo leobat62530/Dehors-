@@ -225,6 +225,18 @@ describe('obstacles and boosters', () => {
     expect(run.coins).toBe(Math.floor(60 * 0.7));
   });
 
+  it('a booster lying on the ground is taken while skidding: the slide is not the end', () => {
+    const run = new Run(5, defaultEquipment());
+    run.emptyWorld();
+    kickOff(run, 0.3, 20);
+    while (run.phase === 'flight' && !run.body.rolling) run.step(DT);
+    expect(run.body.rolling).toBe(true);
+    put(run, 'booster', 'liasse', run.body.x + 6, 0);
+    playToEnd(run);
+    expect(run.coins).toBeGreaterThanOrEqual(BALANCE.boosterEffects.liasse.coins);
+    expect(BALANCE.spawn.airBandFloor).toBe(0);
+  });
+
   it('a clinger slows the run until three quick taps', () => {
     const run = new Run(2, defaultEquipment());
     run.emptyWorld();
@@ -308,6 +320,25 @@ describe('aerial spawns follow the path', () => {
       const yp = predictY(0, 300, 80, 0, x);
       expect(e.y).toBeGreaterThanOrEqual(yp - spread - 2 * S.airSpreadFactor * 100 - 1);
       expect(e.y).toBeLessThanOrEqual(yp + spread + 2 * S.airSpreadFactor * 100 + 1);
+    }
+  });
+
+  it('keeps bonuses and maluses at least minGap apart, coins excepted', () => {
+    const gap = BALANCE.spawn.minGap;
+    for (let seed = 1; seed <= 12; seed++) {
+      const pool = new EntityPool();
+      const sp = new Spawner(pool, 'depart');
+      sp.reset();
+      sp.advance(new Rng(seed), 0, 30, 60, 20);
+      const things = pool.items.filter((e) => e.active && e.type !== 'coin' && e.type !== 'wall');
+      expect(things.length).toBeGreaterThan(5);
+      for (let i = 0; i < things.length; i++) {
+        for (let j = i + 1; j < things.length; j++) {
+          const a = things[i]!;
+          const b = things[j]!;
+          expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(gap);
+        }
+      }
     }
   });
 

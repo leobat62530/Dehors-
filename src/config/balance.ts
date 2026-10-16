@@ -71,13 +71,22 @@ export const BALANCE = {
     rollFrictionPerSecond: 0.94,
     /** Constant rolling resistance (m/s²), so a roll always ends in a few seconds. */
     rollResistance: 3,
+    /**
+     * Falling speed the air lets the character reach (m/s): extra drag on the way down, so a fall
+     * from high up ends in a bell-shaped arc rather than a vertical drop. Fades out with the air.
+     */
+    fallTerminalSpeed: 55,
+    /** Share of that holding force that also pushes forward while falling: the dive becomes a glide. */
+    glideRatio: 0.12,
   },
 
   end: {
     /** Run ends when total speed drops below this (m/s) while on the ground. */
     minSpeed: 1.5,
-    /** Run ends after this long without any distance gain (s). */
+    /** On the ground, the run ends after this long without any distance gain (s). */
     noProgressSeconds: 1.2,
+    /** In the air the character always gets to land: only a very long stall ends the run (s). */
+    airNoProgressSeconds: 20,
     /** Smallest distance gain that counts as progress (m). */
     progressEpsilon: 0.01,
   },
@@ -256,27 +265,31 @@ export const BALANCE = {
     airSpreadBase: 25,
     airSpreadFactor: 0.12,
     /** Global multipliers on the per-stage densities below. */
-    densityScale: { bouncers: 1.3, boosters: 1.7, obstacles: 1 },
+    densityScale: { bouncers: 1, boosters: 0.9, obstacles: 1 },
+    /** Two bonuses or maluses (coins apart) never sit closer than this (m): a crowded spot is skipped. */
+    minGap: 16,
+    /** Lowest altitude of an aerial spawn (m): 0 keeps bonuses reachable while skidding on the ground. */
+    airBandFloor: 0,
     /** Sizes (m) of boosters, obstacles and coins: never smaller than the character. `scale` multiplies every aerial thing. */
     sizes: { booster: { w: 2.6, h: 2.6 }, obstacle: { w: 2.8, h: 3 }, coin: 1.3, scale: 1 },
     stages: {
-      arras: { bouncers: 1.4, boosters: 0.5, obstacles: 0.12, kinds: { pigeon: 6, ballon: 2 }, wallEvery: 230, wallHeight: 22 },
-      somme: { bouncers: 1.1, boosters: 0.5, obstacles: 0.18, kinds: { ballon: 5, pigeon: 2, montgolfiere: 1 }, wallEvery: 380, wallHeight: 28 },
-      paris: { bouncers: 1.6, boosters: 0.6, obstacles: 0.3, kinds: { pigeon: 7, drone: 3, ballon: 1 }, wallEvery: 650, wallHeight: 40 },
-      campagne: { bouncers: 0.8, boosters: 0.45, obstacles: 0.22, kinds: { montgolfiere: 4, ballon: 3, pigeon: 1 }, wallEvery: 1_600, wallHeight: 45 },
-      lyon: { bouncers: 1.0, boosters: 0.5, obstacles: 0.3, kinds: { drone: 5, pigeon: 3, ballon: 1 }, wallEvery: 3_000, wallHeight: 55 },
-      marseille: { bouncers: 1.2, boosters: 0.6, obstacles: 0.3, kinds: { mouette: 7, ballon: 2, drone: 1 }, wallEvery: 5_000, wallHeight: 60 },
-      pyrenees: { bouncers: 0.7, boosters: 0.55, obstacles: 0.32, kinds: { ballon: 4, montgolfiere: 2 }, wallEvery: 9_000, wallHeight: 80 },
-      espagne: { bouncers: 0.8, boosters: 0.5, obstacles: 0.34, kinds: { ballon: 4, mouette: 2, thermique: 2 }, wallEvery: 16_000, wallHeight: 90 },
-      mediterranee: { bouncers: 0.9, boosters: 0.5, obstacles: 0.3, kinds: { poisson: 6, mouette: 4 }, wallEvery: 22_000, wallHeight: 70 },
-      maroc: { bouncers: 0.7, boosters: 0.55, obstacles: 0.36, kinds: { thermique: 4, ballon: 2, chameau: 1, mouette: 1 }, wallEvery: 30_000, wallHeight: 110 },
-      algerie: { bouncers: 0.7, boosters: 0.5, obstacles: 0.4, kinds: { drone: 4, mouette: 3, thermique: 2 }, wallEvery: 36_000, wallHeight: 120 },
-      tunisie: { bouncers: 0.6, boosters: 0.5, obstacles: 0.4, kinds: { thermique: 5, ballon: 2, chameau: 1 }, wallEvery: 42_000, wallHeight: 130 },
-      soudan: { bouncers: 0.45, boosters: 0.45, obstacles: 0.44, kinds: { thermique: 6, ballon: 1 }, wallEvery: 60_000, wallHeight: 150 },
-      somalie: { bouncers: 0.45, boosters: 0.4, obstacles: 0.46, kinds: { mouette: 6, thermique: 2 }, wallEvery: 70_000, wallHeight: 160 },
-      congo: { bouncers: 0.5, boosters: 0.45, obstacles: 0.48, kinds: { thermique: 5, ballon: 2, drone: 1 }, wallEvery: 80_000, wallHeight: 180 },
-      nigeria: { bouncers: 0.35, boosters: 0.6, obstacles: 0.52, kinds: { drone: 4, mouette: 2, thermique: 2 }, wallEvery: 60_000, wallHeight: 220 },
-      desert: { bouncers: 0.2, boosters: 0.3, obstacles: 0.1, kinds: { thermique: 6, chameau: 1 }, wallEvery: 400_000, wallHeight: 260 },
+      arras: { bouncers: 1.4, boosters: 0.5, obstacles: 0.12, kinds: { pigeon: 6, ballon: 2 }, wallEvery: 230, wallHeight: 11 },
+      somme: { bouncers: 1.1, boosters: 0.5, obstacles: 0.18, kinds: { ballon: 5, pigeon: 2, montgolfiere: 1 }, wallEvery: 380, wallHeight: 14 },
+      paris: { bouncers: 1.6, boosters: 0.6, obstacles: 0.3, kinds: { pigeon: 7, drone: 3, ballon: 1 }, wallEvery: 650, wallHeight: 20 },
+      campagne: { bouncers: 0.8, boosters: 0.45, obstacles: 0.22, kinds: { montgolfiere: 4, ballon: 3, pigeon: 1 }, wallEvery: 1_600, wallHeight: 22.5 },
+      lyon: { bouncers: 1.0, boosters: 0.5, obstacles: 0.3, kinds: { drone: 5, pigeon: 3, ballon: 1 }, wallEvery: 3_000, wallHeight: 27.5 },
+      marseille: { bouncers: 1.2, boosters: 0.6, obstacles: 0.3, kinds: { mouette: 7, ballon: 2, drone: 1 }, wallEvery: 5_000, wallHeight: 30 },
+      pyrenees: { bouncers: 0.7, boosters: 0.55, obstacles: 0.32, kinds: { ballon: 4, montgolfiere: 2 }, wallEvery: 9_000, wallHeight: 40 },
+      espagne: { bouncers: 0.8, boosters: 0.5, obstacles: 0.34, kinds: { ballon: 4, mouette: 2, thermique: 2 }, wallEvery: 16_000, wallHeight: 45 },
+      mediterranee: { bouncers: 0.9, boosters: 0.5, obstacles: 0.3, kinds: { poisson: 6, mouette: 4 }, wallEvery: 22_000, wallHeight: 35 },
+      maroc: { bouncers: 0.7, boosters: 0.55, obstacles: 0.36, kinds: { thermique: 4, ballon: 2, chameau: 1, mouette: 1 }, wallEvery: 30_000, wallHeight: 55 },
+      algerie: { bouncers: 0.7, boosters: 0.5, obstacles: 0.4, kinds: { drone: 4, mouette: 3, thermique: 2 }, wallEvery: 36_000, wallHeight: 60 },
+      tunisie: { bouncers: 0.6, boosters: 0.5, obstacles: 0.4, kinds: { thermique: 5, ballon: 2, chameau: 1 }, wallEvery: 42_000, wallHeight: 65 },
+      soudan: { bouncers: 0.45, boosters: 0.45, obstacles: 0.44, kinds: { thermique: 6, ballon: 1 }, wallEvery: 60_000, wallHeight: 75 },
+      somalie: { bouncers: 0.45, boosters: 0.4, obstacles: 0.46, kinds: { mouette: 6, thermique: 2 }, wallEvery: 70_000, wallHeight: 80 },
+      congo: { bouncers: 0.5, boosters: 0.45, obstacles: 0.48, kinds: { thermique: 5, ballon: 2, drone: 1 }, wallEvery: 80_000, wallHeight: 90 },
+      nigeria: { bouncers: 0.35, boosters: 0.6, obstacles: 0.52, kinds: { drone: 4, mouette: 2, thermique: 2 }, wallEvery: 60_000, wallHeight: 110 },
+      desert: { bouncers: 0.2, boosters: 0.3, obstacles: 0.1, kinds: { thermique: 6, chameau: 1 }, wallEvery: 400_000, wallHeight: 130 },
     },
     /** Above the tropopause the layer table replaces the aerial spawns of the country. */
     layers: {
@@ -354,9 +367,10 @@ export const BALANCE = {
     suitDragPerLevel: 0.9,
     /** Extra pickup radius per "Aimant" level (m). */
     magnetRadiusPerLevel: 0.5,
-    /** Rocket: speed multiplier and no-drag seconds per charge. */
-    rocketBoost: 2,
-    rocketSeconds: 2,
+    /** Rocket: fuel seconds per charge, thrust (m/s²) while the finger holds, lowest thrust angle (°). */
+    rocketFuelPerCharge: 1.5,
+    rocketThrust: 40,
+    rocketMinAngle: 12,
     /** Start further by this many metres per "Tremplin" level. */
     rampMetresPerLevel: 200,
   },
@@ -408,6 +422,9 @@ export const BALANCE = {
 
   /** Visual and timing effects. */
   fx: {
+    /** Flames behind the character from this speed (m/s); they turn blue-white above `flameHotSpeed`. */
+    flameSpeed: 110,
+    flameHotSpeed: 280,
     /** Sparks while skidding on the ground: one burst every so often (s), this many each. */
     sparkEverySeconds: 0.06,
     sparksPerBurst: 2,
