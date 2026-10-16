@@ -7,6 +7,7 @@
  *   POST /api/webhook  Telegram update (secret header)  → pre-checkout answer, payment record
  *   GET  /api/stats    header x-dashboard-token         → aggregates for the dashboard
  *   POST /api/setup    header x-dashboard-token         → registers the Telegram webhook
+ *   GET  /api/health   → state of the secrets; registers the webhook itself when it is missing
  *
  * Secrets: BOT_TOKEN (BotFather), WEBHOOK_SECRET, DASHBOARD_TOKEN, EVENT_SALT.
  * The bot token never leaves this file; the client only ever sees invoice links.
@@ -260,6 +261,26 @@ async function setup(req: Request): Promise<Response> {
   return json({ ok: r.ok, url, description: r.description ?? '' });
 }
 
+/** Health check that also keeps the Telegram webhook pointed at this function (idempotent: it only ever sets our own URL and secret). */
+async function health(): Promise<Response> {
+  const out: Record<string, unknown> = { ok: true, bot: Boolean(BOT_TOKEN), secret: Boolean(WEBHOOK_SECRET), dashboard: Boolean(DASHBOARD_TOKEN) };
+  if (BOT_TOKEN && WEBHOOK_SECRET) {
+    const url = `${SUPABASE_URL}/functions/v1/api/webhook`;
+    const info = await telegram('getWebhookInfo', {});
+    const current = (info.result as { url?: string; pending_update_count?: number } | undefined) ?? {};
+    let registered = info.ok && current.url === url;
+    if (info.ok && !registered) {
+      const r = await telegram('setWebhook', { url, secret_token: WEBHOOK_SECRET, allowed_updates: ['message', 'pre_checkout_query'] });
+      registered = r.ok;
+      out.setWebhook = r.description ?? '';
+    }
+    out.webhook = registered;
+    out.pending = current.pending_update_count ?? 0;
+    if (!info.ok) out.telegram = info.description ?? 'error';
+  }
+  return json(out);
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
   const path = new URL(req.url).pathname.replace(/\/+$/, '');
@@ -271,7 +292,7 @@ Deno.serve(async (req: Request) => {
     if (req.method === 'POST' && route === 'webhook') return await webhook(req);
     if (req.method === 'GET' && route === 'stats') return await stats(req);
     if (req.method === 'POST' && route === 'setup') return await setup(req);
-    if (req.method === 'GET' && route === 'health') return json({ ok: true, bot: Boolean(BOT_TOKEN), webhook: Boolean(WEBHOOK_SECRET) });
+    if (req.method === 'GET' && route === 'health') return await health();
   } catch (e) {
     return json({ error: 'internal', detail: String(e) }, 500);
   }

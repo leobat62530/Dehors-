@@ -39,7 +39,7 @@ Le bundle se charge tel quel dans une mini-app : créer le bot avec BotFather, a
 
 Projet Supabase « dehors » (`ebkztcveldnlamymhcsu`, Paris). `supabase/functions/api/index.ts` est la seule fonction : factures Stars (`/invoice`), achats à créditer (`/claim`), événements anonymes (`/events`), webhook Telegram (`/webhook`), statistiques (`/stats`) et enregistrement du webhook (`/setup`). Les tables (`players`, `invoices`, `purchases`, `events`, vue `daily_stats`) sont fermées au public : seule la fonction y accède. L'identifiant Telegram ne sert qu'à rattacher les achats ; les événements portent un hachage salé.
 
-Secrets à saisir dans le tableau de bord Supabase (Edge Functions → Secrets) : `BOT_TOKEN` (BotFather), `WEBHOOK_SECRET` et `DASHBOARD_TOKEN` (deux chaînes aléatoires longues), `EVENT_SALT` (facultatif). Puis, une fois, `POST https://ebkztcveldnlamymhcsu.supabase.co/functions/v1/api/setup` avec l'en-tête `x-dashboard-token` pour enregistrer le webhook du bot. Les prix de la fonction doivent rester égaux à ceux de `balance.ts` (un test le vérifie). Tableau de bord : `admin.html` à côté du jeu, protégé par `DASHBOARD_TOKEN`.
+Secrets à saisir dans le tableau de bord Supabase (Edge Functions → Secrets) : `BOT_TOKEN` (BotFather), `WEBHOOK_SECRET` et `DASHBOARD_TOKEN` (deux chaînes aléatoires longues), `EVENT_SALT` (facultatif). Ensuite, ouvrir `https://ebkztcveldnlamymhcsu.supabase.co/functions/v1/api/health` : la fonction vérifie les secrets et enregistre elle-même le webhook du bot s'il manque (`POST /setup` avec `x-dashboard-token` le force). Les prix de la fonction doivent rester égaux à ceux de `balance.ts` (un test le vérifie). Tableau de bord : `admin.html` à côté du jeu, protégé par `DASHBOARD_TOKEN`.
 
 ## Déploiement
 
