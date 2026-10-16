@@ -1,5 +1,7 @@
 import { BALANCE } from '../config/balance';
-import { createBody, launch, stepBody } from './physics';
+import { createBody, type Environment, launch, stepBody } from './physics';
+
+const GHOST_ENV: Environment = { dragScale: 1, wind: true };
 
 /**
  * Ghost trajectory shown while aiming. Points are written into a preallocated buffer,
@@ -20,7 +22,7 @@ export class GhostTrajectory {
     const dt = 1 / BALANCE.loop.physicsHz;
     this.count = 0;
     for (let i = 0; i < BALANCE.render.ghostDots; i++) {
-      for (let s = 0; s < BALANCE.render.ghostStepsPerDot; s++) stepBody(b, dt);
+      for (let s = 0; s < BALANCE.render.ghostStepsPerDot; s++) stepBody(b, dt, undefined, GHOST_ENV);
       this.xs[i] = b.x;
       this.ys[i] = b.y;
       this.count++;

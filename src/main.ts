@@ -17,6 +17,11 @@ const app = new App(canvas, storage());
 attachPointer(canvas, app);
 window.addEventListener('resize', () => app.resize());
 
+if (import.meta.env.DEV) {
+  // Dev-only hook for screenshots and manual tests: never shipped in the production bundle.
+  (window as unknown as { __dehors: unknown }).__dehors = app;
+}
+
 startAnimationLoop(
   new FixedStepper(
     (dt) => app.update(dt),
