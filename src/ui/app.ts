@@ -3,6 +3,7 @@ import type { PointerListener } from '../core/input';
 import { newSeed } from '../core/rng';
 import { aimFromDrag } from '../game/kick';
 import { speedOf } from '../game/physics';
+import { giftAmount, giftCooldown, levelFromXp, UPGRADE_IDS, upgradeMaxed, upgradePrice, xpForRun } from '../game/progress';
 import { defaultEquipment, Run } from '../game/run';
 import { type KeyValueStore, loadSave, type SaveData, writeSave } from '../game/save';
 import { GhostTrajectory } from '../game/trajectory';
@@ -13,7 +14,7 @@ import { drawEntity } from '../theme/entitySprites';
 import { drawBorderSign, drawLayerSign, drawScenery, drawStars } from '../theme/scenery';
 import { font, THEME } from '../theme/theme';
 import { formatAltitude, formatDistance, formatSpeedKmh } from './format';
-import { fatalText, helmetName, layerName, stageName, t } from './i18n';
+import { fatalText, helmetName, layerName, stageName, t, upgradeEffect, upgradeName } from './i18n';
 
 interface Button {
   x: number;
@@ -22,11 +23,24 @@ interface Button {
   h: number;
 }
 
+function btn(): Button {
+  return { x: 0, y: 0, w: 0, h: 0 };
+}
+
 function inside(b: Button, x: number, y: number): boolean {
   return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
-/** Game screen: aim, kick, flight, end screen. Owns the canvas and the current run. */
+function formatCooldown(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h > 0 ? `${h} h ${String(m).padStart(2, '0')}` : `${m} min`;
+}
+
+type Screen = 'home' | 'game' | 'shop';
+type ShopTab = 'upgrades' | 'helmets';
+
+/** Game screen: home, aim, kick, flight, end screen and shop. Owns the canvas and the current run. */
 export class App implements PointerListener {
   private readonly ctx: CanvasRenderingContext2D;
   private width = 0;
@@ -37,6 +51,12 @@ export class App implements PointerListener {
   private readonly run: Run;
   private readonly ghost = new GhostTrajectory();
   private readonly equipment = defaultEquipment();
+
+  private screen: Screen = 'home';
+  private shopTab: ShopTab = 'upgrades';
+  /** Where the shop's back button returns to. */
+  private shopReturn: Screen = 'home';
+  private now = 0;
 
   // camera (world metres) and zoom
   private camX = 0;
@@ -53,9 +73,23 @@ export class App implements PointerListener {
   private paused = false;
   private newRecord = false;
   private newAltitudeRecord = false;
-  private readonly replayButton: Button = { x: 0, y: 0, w: 0, h: 0 };
-  private readonly pauseButton: Button = { x: 0, y: 0, w: 0, h: 0 };
-  private readonly speedButton: Button = { x: 0, y: 0, w: 0, h: 0 };
+  private levelsGained = 0;
+  private runXp = 0;
+
+  // buttons
+  private readonly replayButton = btn();
+  private readonly endShopButton = btn();
+  private readonly endHomeButton = btn();
+  private readonly pauseButton = btn();
+  private readonly speedButton = btn();
+  private readonly playButton = btn();
+  private readonly homeShopButton = btn();
+  private readonly giftButton = btn();
+  private readonly soonButtons: Button[] = [btn(), btn(), btn(), btn()];
+  private readonly tabButtons: Button[] = [btn(), btn()];
+  private readonly rowButtons: Button[] = UPGRADE_IDS.map(() => btn());
+  private readonly backButton = btn();
+  private giftFlash = 0;
 
   // signs and flashes (seconds remaining)
   private stageSignTime = 0;
@@ -65,10 +99,6 @@ export class App implements PointerListener {
   private layerSignRising = true;
   private flash = 0;
   private lawyerTime = 0;
-  /** End screen helmet shop: one button per helmet. */
-  private readonly helmetButtons: Button[] = BALANCE.helmets.map(() => ({ x: 0, y: 0, w: 0, h: 0 }));
-  private shopOpen = false;
-  private readonly shopButton: Button = { x: 0, y: 0, w: 0, h: 0 };
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -78,7 +108,8 @@ export class App implements PointerListener {
     if (!ctx) throw new Error('Canvas 2D indisponible');
     this.ctx = ctx;
     this.save = loadSave(store);
-    this.equipment.helmetCharges = this.save.helmet?.charges ?? 0;
+    this.save.level = levelFromXp(this.save.xp).level;
+    this.applyEquipment();
     this.run = new Run(newSeed(), this.equipment, 'depart', {
       onObstacle: (e) => {
         this.shake = Math.min(1, this.shake + 0.5);
@@ -107,8 +138,26 @@ export class App implements PointerListener {
         this.flash = 1;
         this.shake = 1;
       },
+      onRocket: () => {
+        this.flash = 0.35;
+        this.shake = 0.5;
+      },
     });
     this.resize();
+  }
+
+  /** The run reads its equipment from this object; it mirrors the save's upgrades. */
+  private applyEquipment(): void {
+    const u = this.save.upgrades;
+    const eq = this.equipment;
+    eq.kickLevel = u.force;
+    eq.solesLevel = u.semelles;
+    eq.suitLevel = u.combinaison;
+    eq.magnetLevel = u.aimant;
+    eq.rocketCharges = u.fusee;
+    eq.rampLevel = u.tremplin;
+    eq.lawyerCharges = u.avocat;
+    eq.helmetCharges = this.save.helmet?.charges ?? 0;
   }
 
   resize(): void {
@@ -117,47 +166,67 @@ export class App implements PointerListener {
     this.height = this.canvas.clientHeight;
     this.canvas.width = Math.round(this.width * this.dpr);
     this.canvas.height = Math.round(this.height * this.dpr);
-    const bw = Math.min(this.width * 0.7, 320);
-    this.replayButton.w = bw;
-    this.replayButton.h = 72;
-    this.replayButton.x = (this.width - bw) / 2;
-    this.replayButton.y = this.height * 0.68;
-    this.pauseButton.x = 12;
-    this.pauseButton.y = 12;
-    this.pauseButton.w = 44;
-    this.pauseButton.h = 44;
-    this.speedButton.w = 64;
-    this.speedButton.h = 44;
-    this.speedButton.x = this.width - 12 - this.speedButton.w;
-    this.speedButton.y = this.height - 24 - this.speedButton.h;
-    this.shopButton.w = bw;
-    this.shopButton.h = 48;
-    this.shopButton.x = (this.width - bw) / 2;
-    this.shopButton.y = this.replayButton.y + this.replayButton.h + 42;
-    const panelW = Math.min(this.width - 32, 380);
-    const panelX = (this.width - panelW) / 2;
-    this.helmetButtons.forEach((b, i) => {
-      b.x = panelX + 16;
-      b.w = panelW - 32;
-      b.h = 40;
-      b.y = this.height * 0.2 + 56 + i * 46;
-    });
+    const W = this.width;
+    const H = this.height;
+    const bw = Math.min(W * 0.7, 320);
+    const bx = (W - bw) / 2;
+
+    // end screen
+    Object.assign(this.replayButton, { x: bx, y: H * 0.7, w: bw, h: 64 });
+    Object.assign(this.endShopButton, { x: bx, y: H * 0.7 + 76, w: bw / 2 - 6, h: 44 });
+    Object.assign(this.endHomeButton, { x: bx + bw / 2 + 6, y: H * 0.7 + 76, w: bw / 2 - 6, h: 44 });
+
+    // flight
+    Object.assign(this.pauseButton, { x: 12, y: 12, w: 44, h: 44 });
+    Object.assign(this.speedButton, { x: W - 12 - 64, y: H - 24 - 44, w: 64, h: 44 });
+
+    // home
+    Object.assign(this.playButton, { x: bx, y: H * 0.5, w: bw, h: 72 });
+    Object.assign(this.homeShopButton, { x: bx, y: H * 0.5 + 86, w: bw / 2 - 6, h: 48 });
+    Object.assign(this.giftButton, { x: bx + bw / 2 + 6, y: H * 0.5 + 86, w: bw / 2 - 6, h: 48 });
+    const sw = (bw - 18) / 4;
+    this.soonButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (sw + 6), y: H * 0.5 + 148, w: sw, h: 56 }));
+
+    // shop
+    const panelW = Math.min(W - 24, 420);
+    const panelX = (W - panelW) / 2;
+    const tabY = 66;
+    this.tabButtons.forEach((b, i) => Object.assign(b, { x: panelX + 12 + i * (panelW / 2 - 12), y: tabY, w: panelW / 2 - 18, h: 40 }));
+    Object.assign(this.backButton, { x: bx, y: H - 72, w: bw, h: 48 });
+    const top = tabY + 56;
+    const rowH = Math.max(44, Math.min(58, (this.backButton.y - 16 - top) / this.rowButtons.length - 6));
+    this.rowButtons.forEach((b, i) => Object.assign(b, { x: panelX + 12, y: top + i * (rowH + 6), w: panelW - 24, h: rowH }));
   }
 
   // ---- input -------------------------------------------------------------
 
   down(x: number, y: number): void {
+    if (this.screen === 'home') {
+      if (inside(this.playButton, x, y)) this.screen = 'game';
+      else if (inside(this.homeShopButton, x, y)) this.openShop('home');
+      else if (inside(this.giftButton, x, y)) this.claimGift();
+      return;
+    }
+    if (this.screen === 'shop') {
+      this.tabButtons.forEach((b, i) => {
+        if (inside(b, x, y)) this.shopTab = i === 0 ? 'upgrades' : 'helmets';
+      });
+      this.rowButtons.forEach((b, i) => {
+        if (!inside(b, x, y)) return;
+        if (this.shopTab === 'upgrades') this.buyUpgrade(i);
+        else this.buyHelmet(i);
+      });
+      if (inside(this.backButton, x, y)) this.screen = this.shopReturn;
+      return;
+    }
     const run = this.run;
     if (run.phase === 'ended') {
-      if (this.shopOpen) {
-        this.helmetButtons.forEach((b, i) => {
-          if (inside(b, x, y)) this.buyHelmet(i);
-        });
-        if (inside(this.shopButton, x, y)) this.restart();
-        return;
-      }
       if (inside(this.replayButton, x, y)) this.restart();
-      else if (inside(this.shopButton, x, y)) this.shopOpen = true;
+      else if (inside(this.endShopButton, x, y)) this.openShop('game');
+      else if (inside(this.endHomeButton, x, y)) {
+        this.restart();
+        this.screen = 'home';
+      }
       return;
     }
     if (run.phase === 'flight' && (this.paused || inside(this.pauseButton, x, y))) {
@@ -169,8 +238,8 @@ export class App implements PointerListener {
       return;
     }
     if (run.phase === 'flight') {
-      // Any other tap in flight is an action tap: three quick ones shake off a clinger.
-      if (run.tap()) this.shake = 0.6;
+      // Any other tap in flight is an action tap: shake off a clinger, or fire the rocket.
+      if (run.tap() && run.clingKind) this.shake = 0.6;
       return;
     }
     if (run.phase === 'aim') {
@@ -185,14 +254,14 @@ export class App implements PointerListener {
   }
 
   move(x: number, y: number): void {
-    if (!this.run.aiming) return;
+    if (this.screen !== 'game' || !this.run.aiming) return;
     this.dragX = x;
     this.dragY = y;
     this.updateAim();
   }
 
   up(): void {
-    if (!this.run.aiming) return;
+    if (this.screen !== 'game' || !this.run.aiming) return;
     this.run.release();
   }
 
@@ -202,27 +271,65 @@ export class App implements PointerListener {
     this.ghost.compute(launchSpeed(this.run.aim.power, this.equipment.kickLevel), this.run.aim.angle);
   }
 
+  private openShop(from: Screen): void {
+    this.shopReturn = from;
+    this.screen = 'shop';
+  }
+
+  private buyUpgrade(index: number): void {
+    const id = UPGRADE_IDS[index];
+    if (!id) return;
+    const level = this.save.upgrades[id];
+    const def = BALANCE.upgrades[id];
+    if (upgradeMaxed(id, level) || this.save.level < def.unlock) return;
+    const price = upgradePrice(id, level);
+    if (this.save.coins < price) return;
+    this.save.coins -= price;
+    this.save.upgrades[id] = level + 1;
+    this.applyEquipment();
+    this.syncAimedRun();
+    writeSave(this.store, this.save);
+  }
+
   private buyHelmet(index: number): void {
     const helmet = BALANCE.helmets[index];
     if (!helmet || this.save.level < helmet.level || this.save.coins < helmet.price) return;
     if (this.save.helmet && this.save.helmet.id === helmet.id) return;
     this.save.coins -= helmet.price;
     this.save.helmet = { id: helmet.id, charges: helmet.walls };
-    this.equipment.helmetCharges = helmet.walls;
+    this.applyEquipment();
+    this.syncAimedRun();
+    writeSave(this.store, this.save);
+  }
+
+  /** A run waiting for its kick picks up new equipment at once (ramp, charges). */
+  private syncAimedRun(): void {
+    if (this.run.phase === 'aim' && !this.run.aiming) this.run.reset(this.run.seed);
+  }
+
+  private claimGift(): void {
+    if (giftCooldown(this.save.lastGift, this.now) > 0) return;
+    const amount = giftAmount(this.save.level);
+    this.save.coins += amount;
+    this.save.totalCoins += amount;
+    this.save.lastGift = this.now;
+    this.giftFlash = 2;
     writeSave(this.store, this.save);
   }
 
   private restart(): void {
     this.newRecord = false;
     this.newAltitudeRecord = false;
-    this.shopOpen = false;
+    this.levelsGained = 0;
+    this.runXp = 0;
     this.paused = false;
     this.lawyerTime = 0;
     this.stageSignTime = 0;
     this.layerSignTime = 0;
     this.flash = 0;
+    this.applyEquipment();
     this.run.reset(newSeed());
-    this.camX = 0;
+    this.camX = this.run.body.x;
     this.camY = 0;
     this.zoom = 1;
   }
@@ -230,7 +337,13 @@ export class App implements PointerListener {
   // ---- simulation ----------------------------------------------------------
 
   update(dt: number): void {
-    if (this.paused) return;
+    this.now = Date.now();
+    if (this.giftFlash > 0) this.giftFlash = Math.max(0, this.giftFlash - dt);
+    if (this.paused || this.screen !== 'game') {
+      // Home and shop keep the scenery alive behind them, without advancing the run.
+      this.run.time += dt;
+      return;
+    }
     const run = this.run;
     const wasEnded = run.phase === 'ended';
     // Time accelerator: more physics steps per frame, the step itself never changes.
@@ -261,22 +374,30 @@ export class App implements PointerListener {
 
   private finishRun(): void {
     const run = this.run;
-    this.save.runs++;
-    if (run.distance > this.save.bestDistance) {
-      this.newRecord = this.save.bestDistance > 0;
-      this.save.bestDistance = run.distance;
+    const save = this.save;
+    save.runs++;
+    if (run.distance > save.bestDistance) {
+      this.newRecord = save.bestDistance > 0;
+      save.bestDistance = run.distance;
     }
-    if (run.maxAltitude > this.save.bestAltitude) {
-      this.newAltitudeRecord = this.save.bestAltitude > 0;
-      this.save.bestAltitude = run.maxAltitude;
+    if (run.maxAltitude > save.bestAltitude) {
+      this.newAltitudeRecord = save.bestAltitude > 0;
+      save.bestAltitude = run.maxAltitude;
     }
-    this.save.coins += run.coins + run.distanceCoins;
+    const earned = run.coins + run.distanceCoins;
+    save.coins += earned;
+    save.totalCoins += earned;
+    this.runXp = xpForRun(run.distance, earned);
+    const before = save.level;
+    save.xp += this.runXp;
+    save.level = levelFromXp(save.xp).level;
+    this.levelsGained = save.level - before;
     // The helmet keeps the charges it has left; consumed when none remain.
-    this.equipment.helmetCharges = run.helmetCharges;
-    if (this.save.helmet) {
-      this.save.helmet = run.helmetCharges > 0 ? { id: this.save.helmet.id, charges: run.helmetCharges } : null;
+    if (save.helmet) {
+      save.helmet = run.helmetCharges > 0 ? { id: save.helmet.id, charges: run.helmetCharges } : null;
     }
-    writeSave(this.store, this.save);
+    this.applyEquipment();
+    writeSave(this.store, save);
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -300,11 +421,19 @@ export class App implements PointerListener {
 
     drawScenery(ctx, W, this.camX, this.camY, this.zoom, originY);
     this.drawGround(originX, originY, scale);
-    if (run.phase === 'aim' && run.aiming) this.drawGhost(originX, originY, scale);
+    if (this.screen === 'game' && run.phase === 'aim' && run.aiming) this.drawGhost(originX, originY, scale);
     this.drawEntities(originX, originY, scale);
     this.drawCharacter(px, py, originX, originY, scale);
     this.drawBoot(originX, originY, scale);
 
+    if (this.screen === 'home') {
+      this.drawHome();
+      return;
+    }
+    if (this.screen === 'shop') {
+      this.drawShop();
+      return;
+    }
     if (this.flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${this.flash.toFixed(2)})`;
       ctx.fillRect(0, 0, W, H);
@@ -419,11 +548,12 @@ export class App implements PointerListener {
   private drawGhost(ox: number, oy: number, scale: number): void {
     const ctx = this.ctx;
     const g = this.ghost;
+    const startX = this.run.body.x;
     ctx.fillStyle = THEME.ghost;
     for (let i = 0; i < g.count; i++) {
       const r = 4 - (i / g.count) * 2.5;
       ctx.beginPath();
-      ctx.arc(ox + (g.xs[i] ?? 0) * scale, oy - (g.ys[i] ?? 0) * scale, r, 0, Math.PI * 2);
+      ctx.arc(ox + (startX + (g.xs[i] ?? 0)) * scale, oy - (g.ys[i] ?? 0) * scale, r, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -454,7 +584,7 @@ export class App implements PointerListener {
     const ctx = this.ctx;
     const P = BALANCE.player;
     // Rest position, pulled back with the drag, then swung forward into the character.
-    let bx = ox + P.bootOffsetX * scale;
+    let bx = ox + (run.body.x + P.bootOffsetX) * scale;
     let by = oy - (P.bootOffsetY + 0.5) * scale;
     let pullX = 0;
     let pullY = 0;
@@ -502,10 +632,11 @@ export class App implements PointerListener {
     ctx.fillText(sub, W / 2, 68);
     ctx.font = font('text', 12);
     ctx.fillStyle = THEME.uiTextSoft;
-    ctx.strokeText(t('defaultName'), W / 2, 88);
-    ctx.fillText(t('defaultName'), W / 2, 88);
+    const name = `${t('defaultName')} · ${t('level')} ${this.save.level}`;
+    ctx.strokeText(name, W / 2, 88);
+    ctx.fillText(name, W / 2, 88);
 
-    // coins (economy arrives in phase 4)
+    // coins
     ctx.textAlign = 'right';
     ctx.font = font('display', 20);
     ctx.fillStyle = THEME.accent;
@@ -519,14 +650,22 @@ export class App implements PointerListener {
       ctx.strokeText(`+${run.coins}`, W - 14, 46);
       ctx.fillText(`+${run.coins}`, W - 14, 46);
     }
-    if (run.phase === 'flight' && run.helmetCharges > 0) {
+    if (run.phase === 'flight') {
+      // Charges left: helmet walls and rockets.
       ctx.textAlign = 'left';
       ctx.font = font('text', 13);
       ctx.fillStyle = THEME.uiText;
       ctx.lineWidth = 3;
-      const label = `⛑ ${run.helmetCharges}`;
-      ctx.strokeText(label, 64, 26);
-      ctx.fillText(label, 64, 26);
+      let y = 26;
+      if (run.helmetCharges > 0) {
+        ctx.strokeText(`⛑ ${run.helmetCharges}`, 64, y);
+        ctx.fillText(`⛑ ${run.helmetCharges}`, 64, y);
+        y += 18;
+      }
+      if (run.rocketCharges > 0) {
+        ctx.strokeText(`🚀 ${run.rocketCharges}`, 64, y);
+        ctx.fillText(`🚀 ${run.rocketCharges}`, 64, y);
+      }
     }
     if (run.phase === 'flight' && run.clingKind) {
       ctx.textAlign = 'center';
@@ -652,6 +791,114 @@ export class App implements PointerListener {
     ctx.fillText(t('resume'), this.width / 2, this.height * 0.45 + 40);
   }
 
+  // ---- widgets ------------------------------------------------------------
+
+  private button(b: Button, label: string, style: 'primary' | 'secondary' | 'disabled', size = 18): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = style === 'primary' ? THEME.accent : style === 'secondary' ? THEME.ui : 'rgba(27,29,42,0.5)';
+    roundRect(ctx, b.x, b.y, b.w, b.h, Math.min(18, b.h / 3));
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = style === 'primary' ? THEME.outline : style === 'secondary' ? THEME.accent : 'rgba(255,255,255,0.15)';
+    ctx.stroke();
+    ctx.fillStyle = style === 'primary' ? THEME.ui : style === 'secondary' ? THEME.uiText : THEME.uiTextSoft;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = font('display', size);
+    ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2);
+  }
+
+  /** Level and progress bar, `w` wide, top-left at (x, y). */
+  private drawXpBar(x: number, y: number, w: number): void {
+    const ctx = this.ctx;
+    const p = levelFromXp(this.save.xp);
+    const ratio = p.needed > 0 ? p.into / p.needed : 1;
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.font = font('display', 14);
+    ctx.fillStyle = THEME.uiText;
+    ctx.fillText(`${t('level')} ${p.level}`, x, y);
+    ctx.textAlign = 'right';
+    ctx.font = font('text', 12);
+    ctx.fillStyle = THEME.uiTextSoft;
+    ctx.fillText(p.needed > 0 ? `${p.into} / ${p.needed} ${t('xp')}` : t('maxed'), x + w, y + 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    roundRect(ctx, x, y + 20, w, 10, 5);
+    ctx.fill();
+    ctx.fillStyle = THEME.accent;
+    roundRect(ctx, x, y + 20, Math.max(10, w * ratio), 10, 5);
+    ctx.fill();
+  }
+
+  // ---- screens -------------------------------------------------------------
+
+  private drawHome(): void {
+    const ctx = this.ctx;
+    const W = this.width;
+    const H = this.height;
+    ctx.fillStyle = THEME.shade;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.lineJoin = 'round';
+    ctx.font = font('display', Math.min(72, W * 0.18));
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = THEME.outline;
+    ctx.fillStyle = THEME.accent;
+    ctx.strokeText(t('title'), W / 2, H * 0.09);
+    ctx.fillText(t('title'), W / 2, H * 0.09);
+
+    const panelW = Math.min(W - 32, 380);
+    const panelX = (W - panelW) / 2;
+    const panelY = H * 0.24;
+    ctx.fillStyle = THEME.ui;
+    roundRect(ctx, panelX, panelY, panelW, 160, 20);
+    ctx.fill();
+    ctx.font = font('text', 15);
+    const rows: [string, string][] = [
+      [t('bestDistance'), this.save.bestDistance > 0 ? formatDistance(this.save.bestDistance) : '—'],
+      [t('bestAltitude'), this.save.bestAltitude > 0 ? formatAltitude(this.save.bestAltitude) : '—'],
+      [t('coinsTotal'), `${this.save.coins} ●`],
+    ];
+    let y = panelY + 18;
+    for (const [label, value] of rows) {
+      ctx.textAlign = 'left';
+      ctx.fillStyle = THEME.uiTextSoft;
+      ctx.fillText(label, panelX + 20, y);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = label === t('coinsTotal') ? THEME.accent : THEME.uiText;
+      ctx.fillText(value, panelX + panelW - 20, y);
+      y += 26;
+    }
+    this.drawXpBar(panelX + 20, y + 6, panelW - 40);
+
+    this.button(this.playButton, t('play'), 'primary', 30);
+    this.button(this.homeShopButton, t('shop'), 'secondary', 17);
+    const cooldown = giftCooldown(this.save.lastGift, this.now);
+    if (cooldown > 0) {
+      this.button(this.giftButton, `${t('giftIn')} ${formatCooldown(cooldown)}`, 'disabled', 12);
+    } else {
+      this.button(this.giftButton, `${t('gift')} +${giftAmount(this.save.level)} ●`, 'secondary', 14);
+    }
+    if (this.giftFlash > 0) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.font = font('display', 16);
+      ctx.fillStyle = THEME.accent;
+      ctx.globalAlpha = Math.min(1, this.giftFlash);
+      ctx.fillText(`+${giftAmount(this.save.level)} ●`, this.giftButton.x + this.giftButton.w / 2, this.giftButton.y - 22);
+      ctx.globalAlpha = 1;
+    }
+    const soon: string[] = [t('customize'), t('trophies'), t('profiles'), t('settings')];
+    this.soonButtons.forEach((b, i) => {
+      this.button(b, soon[i] ?? '', 'disabled', 11);
+      ctx.font = font('text', 10);
+      ctx.fillStyle = THEME.uiTextSoft;
+      ctx.fillText(t('soon'), b.x + b.w / 2, b.y + b.h - 12);
+    });
+  }
+
   private drawEndScreen(): void {
     const ctx = this.ctx;
     const run = this.run;
@@ -662,34 +909,29 @@ export class App implements PointerListener {
 
     const panelW = Math.min(W - 32, 380);
     const panelX = (W - panelW) / 2;
-    const panelY = H * 0.2;
+    const panelY = H * 0.14;
     ctx.fillStyle = THEME.ui;
-    roundRect(ctx, panelX, panelY, panelW, H * 0.46, 20);
+    roundRect(ctx, panelX, panelY, panelW, 372, 20);
     ctx.fill();
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillStyle = THEME.uiTextSoft;
     ctx.font = font('text', 16);
     const cause =
       run.endReason === 'fatal' && run.fatalKind ? fatalText(run.fatalKind) : run.endReason === 'wall' ? t('endWall') : t('endTitle');
     ctx.fillStyle = run.endReason === 'fatal' || run.endReason === 'wall' ? THEME.danger : THEME.uiTextSoft;
-    ctx.fillText(cause, W / 2, panelY + 20);
-    if (this.shopOpen) {
-      this.drawShop(panelX, panelY);
-      return;
-    }
+    ctx.fillText(cause, W / 2, panelY + 18);
     ctx.fillStyle = THEME.accent;
-    ctx.font = font('display', 52);
-    ctx.fillText(formatDistance(run.distance), W / 2, panelY + 46);
-    if (this.newRecord || this.newAltitudeRecord) {
+    ctx.font = font('display', 50);
+    ctx.fillText(formatDistance(run.distance), W / 2, panelY + 42);
+    if (this.newRecord || this.newAltitudeRecord || this.levelsGained > 0) {
       ctx.fillStyle = THEME.uiText;
-      ctx.font = font('display', 18);
-      ctx.fillText(this.newRecord ? t('endRecord') : t('endAltitudeRecord'), W / 2, panelY + 108);
+      ctx.font = font('display', 17);
+      const line = this.levelsGained > 0 ? `${t('levelUp')} ${t('level')} ${this.save.level}` : this.newRecord ? t('endRecord') : t('endAltitudeRecord');
+      ctx.fillText(line, W / 2, panelY + 102);
     }
 
-    ctx.font = font('text', 16);
-    ctx.fillStyle = THEME.uiText;
+    ctx.font = font('text', 15);
     const farthest = STAGES[run.maxStageIndex] ?? STAGES[0]!;
     const highest = LAYERS[run.maxLayerIndex] ?? LAYERS[0]!;
     const rows: [string, string][] = [
@@ -697,82 +939,94 @@ export class App implements PointerListener {
       [t('endAltitude'), formatAltitude(run.maxAltitude)],
       [t('endLayer'), layerName(highest.id)],
       [t('endSpeed'), `${formatSpeedKmh(run.maxSpeed)} ${t('speedUnit')}`],
-      [t('coinsRun'), `+${run.coins + run.distanceCoins}`],
+      [t('coinsRun'), `+${run.coins + run.distanceCoins} ●`],
+      [t('xp'), `+${this.runXp}`],
       [t('best'), `${formatDistance(this.save.bestDistance)} · ${formatAltitude(this.save.bestAltitude)}`],
     ];
-    let y = panelY + 140;
+    let y = panelY + 130;
     for (const [label, value] of rows) {
       ctx.textAlign = 'left';
       ctx.fillStyle = THEME.uiTextSoft;
-      ctx.fillText(label, panelX + 24, y);
+      ctx.fillText(label, panelX + 22, y);
       ctx.textAlign = 'right';
       ctx.fillStyle = THEME.uiText;
-      ctx.fillText(value, panelX + panelW - 24, y);
-      y += 28;
+      ctx.fillText(value, panelX + panelW - 22, y);
+      y += 25;
     }
+    this.drawXpBar(panelX + 22, y + 8, panelW - 44);
 
-    const btn = this.replayButton;
-    ctx.fillStyle = THEME.accent;
-    roundRect(ctx, btn.x, btn.y, btn.w, btn.h, 18);
-    ctx.fill();
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = THEME.outline;
-    ctx.stroke();
-    ctx.fillStyle = THEME.ui;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = font('display', 30);
-    ctx.fillText(t('replay'), W / 2, btn.y + btn.h / 2);
-
+    this.button(this.replayButton, t('replay'), 'primary', 28);
+    this.button(this.endShopButton, t('shop'), 'secondary', 16);
+    this.button(this.endHomeButton, t('home'), 'secondary', 16);
     ctx.fillStyle = THEME.uiTextSoft;
     ctx.font = font('text', 11);
-    ctx.fillText(`${t('seed')} ${run.seed}`, W / 2, btn.y + btn.h + 22);
-
-    const sb = this.shopButton;
-    ctx.fillStyle = THEME.ui;
-    roundRect(ctx, sb.x, sb.y, sb.w, sb.h, 14);
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = THEME.accent;
-    ctx.stroke();
-    ctx.fillStyle = THEME.uiText;
-    ctx.font = font('display', 18);
-    const helmetLabel = this.save.helmet ? ` · ${helmetName(this.save.helmet.id)} ${this.save.helmet.charges}` : '';
-    ctx.fillText(`${t('shopHelmets')}${helmetLabel}`, W / 2, sb.y + sb.h / 2);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`${t('seed')} ${run.seed}`, W / 2, this.endHomeButton.y + this.endHomeButton.h + 10);
   }
 
-  /** Minimal helmet shop on the end screen; the full shop with tabs arrives in phase 4. */
-  private drawShop(panelX: number, panelY: number): void {
+  /** Full shop: one tab for upgrades, one for helmets. Locked rows are greyed with their level. */
+  private drawShop(): void {
     const ctx = this.ctx;
+    const W = this.width;
+    const H = this.height;
+    ctx.fillStyle = THEME.ui;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.font = font('display', 26);
+    ctx.fillStyle = THEME.uiText;
+    ctx.fillText(t('shop'), this.tabButtons[0]!.x, 18);
+    ctx.textAlign = 'right';
+    ctx.font = font('display', 20);
+    ctx.fillStyle = THEME.accent;
+    ctx.fillText(`${this.save.coins} ●`, this.tabButtons[1]!.x + this.tabButtons[1]!.w, 22);
+
+    this.button(this.tabButtons[0]!, t('shopUpgrades'), this.shopTab === 'upgrades' ? 'primary' : 'disabled', 15);
+    this.button(this.tabButtons[1]!, t('shopHelmets'), this.shopTab === 'helmets' ? 'primary' : 'disabled', 15);
+
+    if (this.shopTab === 'upgrades') {
+      UPGRADE_IDS.forEach((id, i) => {
+        const b = this.rowButtons[i]!;
+        const level = this.save.upgrades[id];
+        const def = BALANCE.upgrades[id];
+        const locked = this.save.level < def.unlock;
+        const maxed = upgradeMaxed(id, level);
+        const price = upgradePrice(id, level);
+        const affordable = !locked && !maxed && this.save.coins >= price;
+        const right = maxed ? t('maxed') : locked ? `${t('locked')} ${def.unlock}` : `${price} ●`;
+        this.shopRow(b, `${upgradeName(id)} · ${level}/${def.levels}`, upgradeEffect(id), right, locked, affordable, maxed);
+      });
+    } else {
+      BALANCE.helmets.forEach((helmet, i) => {
+        const b = this.rowButtons[i]!;
+        const owned = this.save.helmet?.id === helmet.id;
+        const locked = this.save.level < helmet.level;
+        const affordable = !locked && !owned && this.save.coins >= helmet.price;
+        const right = owned ? `${t('owned')} ${this.save.helmet?.charges ?? 0}` : locked ? `${t('locked')} ${helmet.level}` : `${helmet.price} ●`;
+        this.shopRow(b, helmetName(helmet.id), `${helmet.walls} ${t('walls')}`, right, locked, affordable, owned);
+      });
+    }
+    this.button(this.backButton, t('back'), 'secondary', 18);
+  }
+
+  private shopRow(b: Button, title: string, detail: string, right: string, locked: boolean, affordable: boolean, done: boolean): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = done ? 'rgba(255,197,49,0.25)' : locked ? 'rgba(255,255,255,0.05)' : affordable ? 'rgba(42,157,143,0.55)' : 'rgba(255,255,255,0.12)';
+    roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+    ctx.fill();
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    ctx.font = font('display', 16);
-    ctx.fillStyle = THEME.accent;
-    ctx.fillText(`${t('coinsTotal')} : ${this.save.coins} ●`, panelX + 16, panelY + 50);
-    BALANCE.helmets.forEach((helmet, i) => {
-      const b = this.helmetButtons[i]!;
-      const owned = this.save.helmet?.id === helmet.id;
-      const locked = this.save.level < helmet.level;
-      const affordable = this.save.coins >= helmet.price;
-      ctx.fillStyle = owned ? THEME.accent : locked ? 'rgba(255,255,255,0.08)' : affordable ? '#2a9d8f' : 'rgba(255,255,255,0.18)';
-      roundRect(ctx, b.x, b.y, b.w, b.h, 10);
-      ctx.fill();
-      ctx.fillStyle = owned ? THEME.ui : locked ? THEME.uiTextSoft : THEME.uiText;
-      ctx.font = font('text', 14);
-      ctx.textAlign = 'left';
-      ctx.fillText(`${helmetName(helmet.id)} · ${helmet.walls} ${t('walls')}`, b.x + 12, b.y + b.h / 2);
-      ctx.textAlign = 'right';
-      ctx.font = font('display', 14);
-      const right = owned ? `${t('owned')} ${this.save.helmet?.charges ?? 0}` : locked ? `${t('locked')} ${helmet.level}` : `${helmet.price} ●`;
-      ctx.fillText(right, b.x + b.w - 12, b.y + b.h / 2);
-    });
-    ctx.textAlign = 'center';
-    const sb = this.shopButton;
-    ctx.fillStyle = THEME.accent;
-    roundRect(ctx, sb.x, sb.y, sb.w, sb.h, 14);
-    ctx.fill();
-    ctx.fillStyle = THEME.ui;
-    ctx.font = font('display', 18);
-    ctx.fillText(t('replay'), sb.x + sb.w / 2, sb.y + sb.h / 2);
+    ctx.font = font('display', 14);
+    ctx.fillStyle = locked ? THEME.uiTextSoft : THEME.uiText;
+    ctx.fillText(title, b.x + 12, b.y + b.h * 0.33);
+    ctx.font = font('text', 11);
+    ctx.fillStyle = THEME.uiTextSoft;
+    ctx.fillText(detail, b.x + 12, b.y + b.h * 0.72, b.w - 110);
+    ctx.textAlign = 'right';
+    ctx.font = font('display', 14);
+    ctx.fillStyle = done ? THEME.accent : locked ? THEME.uiTextSoft : affordable ? THEME.uiText : THEME.danger;
+    ctx.fillText(right, b.x + b.w - 12, b.y + b.h / 2);
   }
 }

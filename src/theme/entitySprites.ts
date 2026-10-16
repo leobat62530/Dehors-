@@ -507,6 +507,31 @@ export function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, t: number, 
     ctx.restore();
     return;
   }
+  if (e.type === 'coin') {
+    // Gold disc, bobbing; bigger when it is worth more. Pops upward when picked.
+    const r = 0.5 + Math.min(4, e.value - 1) * 0.08;
+    const bob = Math.sin(t * 4 + e.seed * 6) * 0.12;
+    ctx.save();
+    if (e.used) {
+      const k = Math.min(1, e.usedTime / 0.4);
+      ctx.globalAlpha = 1 - k;
+      ctx.translate(0, k * 2.5);
+    }
+    ctx.translate(0, r + bob);
+    ctx.fillStyle = THEME.accent;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 0.12;
+    ctx.strokeStyle = '#b8860b';
+    ctx.stroke();
+    ctx.fillStyle = '#fff2b0';
+    ctx.beginPath();
+    ctx.arc(-r * 0.25, r * 0.25, r * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
   const draw = e.type === 'bouncer' ? BOUNCERS[e.kind] : e.type === 'booster' ? BOOSTERS[e.kind] : OBSTACLES[e.kind];
   if (!draw) return;
   ctx.save();
