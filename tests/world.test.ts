@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../src/config/balance';
 import { dragFactorAt, gravityFactorAt } from '../src/game/atmosphere';
 import { createBody, launch, stepBody } from '../src/game/physics';
-import { Run } from '../src/game/run';
+import { defaultEquipment, Run } from '../src/game/run';
+
+const eq = (kickLevel: number) => ({ ...defaultEquipment(), kickLevel });
 import {
   distanceToNextBorder,
   LAYERS,
@@ -74,7 +76,7 @@ describe('sky layers', () => {
 
   it('a very long flat shot never returns orbit', () => {
     // Launch at the minimum angle with an absurd speed: far along the track, still in the troposphere.
-    const run = new Run(1, 40);
+    const run = new Run(1, eq(40));
     run.aim.power = 1;
     run.aim.angle = BALANCE.kick.minAngle;
     run.aiming = true;
@@ -160,7 +162,7 @@ describe('wind', () => {
 describe('sound barrier', () => {
   it('fires on speed, boosts once and removes drag for its duration', () => {
     let fired = 0;
-    const run = new Run(5, 0, { onSoundBarrier: () => fired++ });
+    const run = new Run(5, eq(0), 'depart', { onSoundBarrier: () => fired++ });
     run.aim.power = 1;
     run.aim.angle = 40;
     run.aiming = true;
@@ -181,7 +183,7 @@ describe('sound barrier', () => {
 
   it('never fires below the barrier speed', () => {
     let fired = 0;
-    const run = new Run(5, 0, { onSoundBarrier: () => fired++ });
+    const run = new Run(5, eq(0), 'depart', { onSoundBarrier: () => fired++ });
     run.aim.power = 1;
     run.aim.angle = 43;
     run.aiming = true;
@@ -194,7 +196,7 @@ describe('sound barrier', () => {
 
 describe('time accelerator', () => {
   it('cycles through the configured steps and back to ×1', () => {
-    const run = new Run(1, 0);
+    const run = new Run(1, eq(0));
     const seen: number[] = [run.timeScale];
     for (let i = 0; i < BALANCE.timeScale.steps.length; i++) {
       run.cycleTimeScale();
@@ -207,7 +209,7 @@ describe('time accelerator', () => {
 describe('stage and layer events', () => {
   it('reports each border crossed, in order', () => {
     const stages: number[] = [];
-    const run = new Run(9, 6, { onStage: (i) => stages.push(i) });
+    const run = new Run(9, eq(6), 'depart', { onStage: (i) => stages.push(i) });
     run.aim.power = 1;
     run.aim.angle = 35;
     run.aiming = true;

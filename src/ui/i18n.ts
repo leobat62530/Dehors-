@@ -16,6 +16,23 @@ const fr = {
   pause: 'Pause',
   resume: 'Reprendre',
   above: 'Au-dessus de',
+  shakeOff: 'Tape 3 fois !',
+  endWall: 'Dans le mur. Un casque la prochaine fois ?',
+  fatal_gendarme: 'Contrôlé. Fin de course.',
+  fatal_urssaf: 'Vous avez été redressé.',
+  lawyer: 'L’avocat a fait annuler le contrôle !',
+  coinsRun: 'Pièces de la course',
+  coinsTotal: 'Pièces',
+  shopHelmets: 'Casques',
+  buy: 'Acheter',
+  owned: 'Équipé',
+  locked: 'Niveau',
+  walls: 'murs',
+  helmet_passoire: 'Casque passoire',
+  helmet_chantier: 'Casque de chantier',
+  helmet_moto: 'Casque de moto',
+  helmet_pompier: 'Casque de pompier',
+  helmet_spatial: 'Casque spatial',
   endStage: 'Pays le plus loin',
   endLayer: 'Couche la plus haute',
   endAltitudeRecord: 'Record d’altitude !',
@@ -62,6 +79,14 @@ export function t(key: TextKey): string {
 
 export function stageName(id: string): string {
   return t(`stage_${id}` as TextKey);
+}
+
+export function fatalText(kind: string): string {
+  return t(`fatal_${kind}` as TextKey);
+}
+
+export function helmetName(id: string): string {
+  return t(`helmet_${id}` as TextKey);
 }
 
 export function layerName(id: string): string {

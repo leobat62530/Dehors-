@@ -158,6 +158,152 @@ export const BALANCE = {
     { id: 'espace', from: 100_000_000 },
   ],
 
+  /** Character kits. Only `depart` is playable; the others carry data but never spawn. */
+  profiles: {
+    depart: {
+      playable: true,
+      boosters: ['liasse', 'sacoche', 'scooter', 'video'],
+      obstacles: ['militante', 'association', 'helico', 'radar', 'gendarme'],
+      fatal: 'gendarme',
+      signature: 'scooter',
+    },
+    entrepreneur: {
+      playable: false,
+      boosters: ['liasse', 'sacoche', 'niche', 'jet'],
+      obstacles: ['impot', 'baril', 'radar', 'urssaf'],
+      fatal: 'urssaf',
+      signature: 'niche',
+    },
+  },
+
+  /** Boosters that appear by country, for any character. */
+  placeBoosters: {
+    pyrenees: ['clopes'],
+    marseille: ['pastis'],
+    maroc: ['the'],
+    tunisie: ['the', 'mirage'],
+    soudan: ['mirage', 'gourde'],
+    somalie: ['gourde'],
+    desert: ['mirage', 'gourde'],
+  },
+
+  /** Bouncers: vertical gain (m/s) and whether they pop after one use. */
+  bouncers: {
+    pigeon: { gain: 18, once: false, w: 1.6, h: 1.2 },
+    ballon: { gain: 22, once: true, w: 2.2, h: 2.6 },
+    mouette: { gain: 26, once: false, w: 2.4, h: 1.2 },
+    drone: { gain: 30, once: true, w: 2.4, h: 1.2 },
+    montgolfiere: { gain: 40, once: false, w: 6, h: 8 },
+    trampoline: { gain: 45, once: false, w: 5, h: 1 },
+    chameau: { gain: 36, once: false, w: 4, h: 3 },
+    thermique: { gain: 28, once: false, w: 6, h: 10 },
+    poisson: { gain: 24, once: false, w: 2, h: 1 },
+    satellite: { gain: 60, once: false, w: 6, h: 4 },
+  },
+
+  /** Booster effects. `speed` multiplies the velocity once, `seconds` is the no-drag window, `coins` the payout. */
+  boosterEffects: {
+    liasse: { coins: 12, speed: 1, seconds: 0, wobble: 0 },
+    sacoche: { coins: 60, speed: 1, seconds: 0, wobble: 0 },
+    scooter: { coins: 0, speed: 1.4, seconds: 2, wobble: 0 },
+    video: { coins: 0, speed: 1.8, seconds: 3, wobble: 0 },
+    clopes: { coins: 0, speed: 1.5, seconds: 1, wobble: 0 },
+    pastis: { coins: 0, speed: 2, seconds: 2, wobble: 1 },
+    niche: { coins: 0, speed: 1, seconds: 3, wobble: 0 },
+    jet: { coins: 0, speed: 2.5, seconds: 4, wobble: 0 },
+    the: { coins: 0, speed: 1.5, seconds: 2, wobble: 0.4 },
+    mirage: { coins: 0, speed: 1, seconds: 0, wobble: 0 },
+    gourde: { coins: 0, speed: 1, seconds: 1.5, wobble: 0 },
+  },
+
+  /** Obstacle effects. `slowPerSecond` for clingers (3 taps to shake off), `slow` once, `coinLoss` share, `push` downwards m/s. */
+  obstacleEffects: {
+    militante: { cling: 0.08, slow: 0, coinLoss: 0, push: 0, dragSeconds: 0, fatal: false },
+    association: { cling: 0.06, slow: 0, coinLoss: 0, push: 0, dragSeconds: 0, fatal: false },
+    helico: { cling: 0, slow: 0, coinLoss: 0, push: 35, dragSeconds: 0, fatal: false },
+    radar: { cling: 0, slow: 0, coinLoss: 0.3, push: 0, dragSeconds: 0, fatal: false },
+    gendarme: { cling: 0, slow: 0, coinLoss: 0, push: 0, dragSeconds: 0, fatal: true },
+    impot: { cling: 0, slow: 0.4, coinLoss: 0, push: 0, dragSeconds: 0, fatal: false },
+    baril: { cling: 0, slow: 0.25, coinLoss: 0, push: 0, dragSeconds: 2, fatal: false },
+    urssaf: { cling: 0, slow: 0, coinLoss: 0, push: 0, dragSeconds: 0, fatal: true },
+  },
+  /** Taps needed to shake off a clinging obstacle, and the window (s) in which they must land. */
+  clinger: { taps: 3, tapWindowSeconds: 1.2 },
+
+  /**
+   * Spawn tables per stage. Densities are entities per 100 m of track. `bouncers` lists the
+   * kinds and their weights, `hardObstacles` the extra density of hard obstacles added along
+   * the track (radar, fatal). `wallEvery` is the distance between walls (m), `wallHeight` in m.
+   */
+  spawn: {
+    chunk: 100,
+    /** Spawn ahead of the character by this much (m). */
+    lookahead: 900,
+    /** Vertical band for aerial spawns: fraction of the current altitude plus this base (m). */
+    airBandBase: 12,
+    airBandFactor: 0.9,
+    airBandMax: 11_000,
+    stages: {
+      arras: { bouncers: 1.4, boosters: 0.5, obstacles: 0.12, kinds: { pigeon: 6, ballon: 2 }, wallEvery: 230, wallHeight: 22 },
+      somme: { bouncers: 1.1, boosters: 0.5, obstacles: 0.18, kinds: { ballon: 5, pigeon: 2, montgolfiere: 1 }, wallEvery: 380, wallHeight: 28 },
+      paris: { bouncers: 1.6, boosters: 0.6, obstacles: 0.3, kinds: { pigeon: 7, drone: 3, ballon: 1 }, wallEvery: 650, wallHeight: 40 },
+      campagne: { bouncers: 0.8, boosters: 0.45, obstacles: 0.22, kinds: { montgolfiere: 4, ballon: 3, pigeon: 1 }, wallEvery: 1_600, wallHeight: 45 },
+      lyon: { bouncers: 1.0, boosters: 0.5, obstacles: 0.3, kinds: { drone: 5, pigeon: 3, ballon: 1 }, wallEvery: 3_000, wallHeight: 55 },
+      marseille: { bouncers: 1.2, boosters: 0.6, obstacles: 0.3, kinds: { mouette: 7, ballon: 2, drone: 1 }, wallEvery: 5_000, wallHeight: 60 },
+      pyrenees: { bouncers: 0.7, boosters: 0.55, obstacles: 0.32, kinds: { ballon: 4, montgolfiere: 2 }, wallEvery: 9_000, wallHeight: 80 },
+      espagne: { bouncers: 0.8, boosters: 0.5, obstacles: 0.34, kinds: { ballon: 4, mouette: 2, thermique: 2 }, wallEvery: 16_000, wallHeight: 90 },
+      mediterranee: { bouncers: 0.9, boosters: 0.5, obstacles: 0.3, kinds: { poisson: 6, mouette: 4 }, wallEvery: 22_000, wallHeight: 70 },
+      maroc: { bouncers: 0.7, boosters: 0.55, obstacles: 0.36, kinds: { thermique: 4, ballon: 2, chameau: 1, mouette: 1 }, wallEvery: 30_000, wallHeight: 110 },
+      algerie: { bouncers: 0.7, boosters: 0.5, obstacles: 0.4, kinds: { drone: 4, mouette: 3, thermique: 2 }, wallEvery: 36_000, wallHeight: 120 },
+      tunisie: { bouncers: 0.6, boosters: 0.5, obstacles: 0.4, kinds: { thermique: 5, ballon: 2, chameau: 1 }, wallEvery: 42_000, wallHeight: 130 },
+      soudan: { bouncers: 0.45, boosters: 0.45, obstacles: 0.44, kinds: { thermique: 6, ballon: 1 }, wallEvery: 60_000, wallHeight: 150 },
+      somalie: { bouncers: 0.45, boosters: 0.4, obstacles: 0.46, kinds: { mouette: 6, thermique: 2 }, wallEvery: 70_000, wallHeight: 160 },
+      congo: { bouncers: 0.5, boosters: 0.45, obstacles: 0.48, kinds: { thermique: 5, ballon: 2, drone: 1 }, wallEvery: 80_000, wallHeight: 180 },
+      nigeria: { bouncers: 0.35, boosters: 0.6, obstacles: 0.52, kinds: { drone: 4, mouette: 2, thermique: 2 }, wallEvery: 60_000, wallHeight: 220 },
+      desert: { bouncers: 0.2, boosters: 0.3, obstacles: 0.1, kinds: { thermique: 6, chameau: 1 }, wallEvery: 400_000, wallHeight: 260 },
+    },
+    /** Above the tropopause the layer table replaces the aerial spawns of the country. */
+    layers: {
+      troposphere: { bouncers: 0, kinds: {} },
+      stratosphere: { bouncers: 0.08, kinds: { ballon: 1 } },
+      orbite: { bouncers: 0.25, kinds: { satellite: 1 } },
+      lune: { bouncers: 0.1, kinds: { satellite: 1 } },
+      espace: { bouncers: 0.05, kinds: { satellite: 1 } },
+    },
+    /** Ground trampolines: chance per chunk, troposphere only. */
+    trampolinePerChunk: 0.12,
+    /** Share of place boosters among booster spawns where the stage has some. */
+    placeBoosterShare: 0.45,
+    /** Hard obstacles (fatal, radar) share of obstacle spawns, rising along the track. */
+    hardShareStart: 0.15,
+    hardShareEnd: 0.5,
+  },
+
+  walls: {
+    /** Speed kept after breaking through a wall with a helmet. */
+    speedKept: 0.85,
+    /** Wall thickness (m). */
+    thickness: 3,
+  },
+
+  helmets: [
+    { id: 'passoire', walls: 1, price: 20, level: 1 },
+    { id: 'chantier', walls: 2, price: 150, level: 4 },
+    { id: 'moto', walls: 3, price: 600, level: 8 },
+    { id: 'pompier', walls: 4, price: 2_000, level: 12 },
+    { id: 'spatial', walls: 6, price: 7_500, level: 18 },
+  ],
+
+  economy: {
+    /** One coin every this many metres, linear until `linearUntil`, then sub-linear with `exponent`. */
+    distanceCoinEvery: 20,
+    linearUntil: 2_000,
+    exponent: 0.6,
+  },
+
+  /** Bouncer gain multiplier per "Semelles" level. */
+  solesGainPerLevel: 1.08,
+
   player: {
     /** Character body size (m), for drawing and future collisions. */
     width: 2.2,
@@ -174,6 +320,14 @@ export const BALANCE = {
 } as const;
 
 export type Balance = typeof BALANCE;
+
+/** Coins earned from the distance alone: 1 per 20 m up to 2 km, sub-linear after. */
+export function distanceCoins(distance: number): number {
+  const E = BALANCE.economy;
+  if (distance <= E.linearUntil) return Math.floor(distance / E.distanceCoinEvery);
+  const base = E.linearUntil / E.distanceCoinEvery;
+  return Math.floor(base * Math.pow(distance / E.linearUntil, E.exponent));
+}
 
 /** Launch speed (m/s) for a kick of the given power (0..1) at the given "Force du coup" level. */
 export function launchSpeed(power: number, kickLevel: number): number {

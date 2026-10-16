@@ -3,7 +3,9 @@ import { BALANCE, launchSpeed } from '../src/config/balance';
 import { FixedStepper } from '../src/core/loop';
 import { aimFromDrag } from '../src/game/kick';
 import { createBody, launch, stepBody } from '../src/game/physics';
-import { Run } from '../src/game/run';
+import { defaultEquipment, Run } from '../src/game/run';
+
+const eq = (kickLevel: number) => ({ ...defaultEquipment(), kickLevel });
 
 const DT = 1 / BALANCE.loop.physicsHz;
 
@@ -47,7 +49,7 @@ describe('kick', () => {
   });
 
   it('ignores a tiny drag', () => {
-    const run = new Run(1, 0);
+    const run = new Run(1, eq(0));
     run.aim.power = BALANCE.kick.minPowerToKick / 2;
     expect(run.release()).toBe(false);
     expect(run.phase).toBe('aim');
@@ -84,7 +86,7 @@ describe('flight physics', () => {
   });
 
   it('bounces lose energy, then the body rolls and the run ends', () => {
-    const run = new Run(7, 0);
+    const run = new Run(7, eq(0));
     kick(run, 1, 43);
     playToEnd(run);
     expect(run.phase).toBe('ended');
@@ -94,7 +96,7 @@ describe('flight physics', () => {
 
   it('a starting player lands in the 200-600 m range at full power', () => {
     // Prompt target: no purchase means a ceiling around 200-400 m of flight, a little more with the roll.
-    const run = new Run(3, 0);
+    const run = new Run(3, eq(0));
     kick(run, 1, 43);
     playToEnd(run);
     expect(run.distance).toBeGreaterThan(200);
@@ -102,10 +104,10 @@ describe('flight physics', () => {
   });
 
   it('a weak kick goes less far than a strong one', () => {
-    const weak = new Run(1, 0);
+    const weak = new Run(1, eq(0));
     kick(weak, 0.3, 43);
     playToEnd(weak);
-    const strong = new Run(1, 0);
+    const strong = new Run(1, eq(0));
     kick(strong, 1, 43);
     playToEnd(strong);
     expect(strong.distance).toBeGreaterThan(weak.distance * 1.5);
@@ -113,7 +115,7 @@ describe('flight physics', () => {
 
   it('a run always ends in a bounded time', () => {
     for (const angle of [15, 30, 43, 60, 75]) {
-      const run = new Run(1, 10);
+      const run = new Run(1, eq(10));
       kick(run, 1, angle);
       const steps = playToEnd(run);
       expect(run.phase).toBe('ended');
@@ -124,7 +126,7 @@ describe('flight physics', () => {
 
 describe('fixed timestep', () => {
   function simulate(frameSeconds: number, totalSeconds: number): { steps: number; xs: number[] } {
-    const run = new Run(42, 0);
+    const run = new Run(42, eq(0));
     kick(run, 0.8, 40);
     const xs: number[] = [];
     const stepper = new FixedStepper(
@@ -166,8 +168,8 @@ describe('fixed timestep', () => {
 
 describe('determinism', () => {
   it('the same seed and the same kick give the same run', () => {
-    const a = new Run(123, 2);
-    const b = new Run(123, 2);
+    const a = new Run(123, eq(2));
+    const b = new Run(123, eq(2));
     kick(a, 0.9, 50);
     kick(b, 0.9, 50);
     playToEnd(a);
