@@ -28,6 +28,8 @@ export const BALANCE = {
     /** Zoom = 1 / (1 + speed / zoomSpeedReference), clamped to minZoom. */
     zoomSpeedReference: 90,
     minZoom: 0.35,
+    /** The character is never drawn smaller than this height on screen (px), whatever the zoom. */
+    minCharacterPx: 30,
     /** Ground tick marks spacing (m), a placeholder until the parallax arrives. */
     groundTickSpacing: 10,
     /** Ghost trajectory: number of dots and physics steps between two dots. */
@@ -79,6 +81,82 @@ export const BALANCE = {
     /** Smallest distance gain that counts as progress (m). */
     progressEpsilon: 0.01,
   },
+
+  altitude: {
+    /** Below this altitude (m) the physics is the plain troposphere physics. */
+    tropopause: 12_000,
+    /** Drag falls linearly from full at the tropopause to zero here (m). The pivot of the game. */
+    dragZeroAltitude: 40_000,
+    /** Gravity starts decreasing above the tropopause and reaches `gravityFloorFactor` × g at this altitude (m). */
+    gravityFloorAltitude: 10_000_000,
+    gravityFloorFactor: 0.04,
+    /** Orbit band: extra horizontal "arcade weightlessness" factor applied to gravity. */
+    orbitGravityFactor: 0.35,
+    /** Moon band: gravity factor relative to the troposphere value. */
+    moonGravityFactor: 0.16,
+  },
+
+  wind: {
+    /** Headwind/tailwind acts through the relative air speed; this caps its effect near the ground (m/s). */
+    maxEffect: 40,
+  },
+
+  soundBarrier: {
+    /** Speed (m/s) at which the barrier breaks. A speed, never a place. */
+    speed: 340,
+    /** Velocity multiplier applied once when the barrier breaks. */
+    boost: 1.6,
+    /** Duration (s) of the effect: no drag, obstacle immunity, visual flash. */
+    seconds: 2.5,
+    /** Minimum seconds between two barrier effects. */
+    cooldown: 4,
+  },
+
+  timeScale: {
+    /** Time accelerator steps the player cycles through during flight. */
+    steps: [1, 2, 5, 10],
+    /** Index of the highest step available without unlock (phase 4 gates the rest). */
+    freeMaxIndex: 3,
+  },
+
+  signs: {
+    /** Seconds a border or layer sign takes to sweep across the screen. */
+    sweepSeconds: 2.2,
+  },
+
+  /**
+   * Ground track. The country depends on the distance x only, in this arcade order.
+   * `from` is the start distance in metres; a stage lasts until the next one.
+   * `wind` is the horizontal air speed (m/s, positive = tailwind).
+   */
+  stages: [
+    { id: 'arras', from: 0, wind: 0 },
+    { id: 'somme', from: 500, wind: -3 },
+    { id: 'paris', from: 2_000, wind: 0 },
+    { id: 'campagne', from: 8_000, wind: -2 },
+    { id: 'lyon', from: 25_000, wind: -3 },
+    { id: 'marseille', from: 70_000, wind: 2 },
+    { id: 'pyrenees', from: 150_000, wind: -8 },
+    { id: 'espagne', from: 300_000, wind: -4 },
+    { id: 'mediterranee', from: 600_000, wind: 6 },
+    { id: 'maroc', from: 900_000, wind: -5 },
+    { id: 'algerie', from: 1_400_000, wind: -6 },
+    { id: 'tunisie', from: 2_000_000, wind: -5 },
+    { id: 'soudan', from: 2_800_000, wind: -10 },
+    { id: 'somalie', from: 4_000_000, wind: -8 },
+    { id: 'congo', from: 5_500_000, wind: -4 },
+    { id: 'nigeria', from: 7_500_000, wind: -14 },
+    { id: 'desert', from: 10_000_000, wind: -9 },
+  ],
+
+  /** Sky layers. The layer depends on the altitude y only. `from` in metres. */
+  layers: [
+    { id: 'troposphere', from: 0 },
+    { id: 'stratosphere', from: 12_000 },
+    { id: 'orbite', from: 200_000 },
+    { id: 'lune', from: 10_000_000 },
+    { id: 'espace', from: 100_000_000 },
+  ],
 
   player: {
     /** Character body size (m), for drawing and future collisions. */
