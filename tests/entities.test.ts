@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BALANCE } from '../src/config/balance';
 import { Rng } from '../src/core/rng';
-import { EntityPool, Spawner } from '../src/game/entities';
+import { EntityPool, predictY, Spawner } from '../src/game/entities';
 import { defaultEquipment, Run } from '../src/game/run';
 
 const DT = 1 / BALANCE.loop.physicsHz;
@@ -147,7 +147,7 @@ describe('walls and helmets', () => {
 
   it('without a helmet, the wall ends the run on the spot', () => {
     const run = new Run(11, defaultEquipment());
-    run.pool.clear();
+    run.emptyWorld();
     wallAt(run, 120, 200);
     kickOff(run);
     playToEnd(run);
@@ -157,7 +157,7 @@ describe('walls and helmets', () => {
 
   it('with a helmet, the wall breaks, one charge goes and speed drops by 15 %', () => {
     const run = new Run(11, { ...defaultEquipment(), helmetCharges: 1 });
-    run.pool.clear();
+    run.emptyWorld();
     wallAt(run, 120, 200);
     wallAt(run, 300, 200);
     kickOff(run);
@@ -178,7 +178,7 @@ describe('walls and helmets', () => {
 
   it('a wall is passed over when the flight is higher than it', () => {
     const run = new Run(11, defaultEquipment());
-    run.pool.clear();
+    run.emptyWorld();
     wallAt(run, 250, 10);
     kickOff(run, 1, 43);
     playToEnd(run);
@@ -199,7 +199,7 @@ describe('obstacles and boosters', () => {
 
   it('the gendarme is fatal with its own text, unless the lawyer is equipped', () => {
     const run = new Run(2, defaultEquipment());
-    run.pool.clear();
+    run.emptyWorld();
     put(run, 'obstacle', 'gendarme', 100, 0);
     kickOff(run);
     playToEnd(run);
@@ -207,7 +207,7 @@ describe('obstacles and boosters', () => {
     expect(run.fatalKind).toBe('gendarme');
 
     const saved = new Run(2, { ...defaultEquipment(), lawyerCharges: 1 });
-    saved.pool.clear();
+    saved.emptyWorld();
     put(saved, 'obstacle', 'gendarme', 100, 0);
     kickOff(saved);
     playToEnd(saved);
@@ -217,7 +217,7 @@ describe('obstacles and boosters', () => {
 
   it('the radar takes 30 % of the coins of the run', () => {
     const run = new Run(2, defaultEquipment());
-    run.pool.clear();
+    run.emptyWorld();
     put(run, 'booster', 'sacoche', 60, 0);
     put(run, 'obstacle', 'radar', 150, 0);
     kickOff(run);
@@ -227,7 +227,7 @@ describe('obstacles and boosters', () => {
 
   it('a clinger slows the run until three quick taps', () => {
     const run = new Run(2, defaultEquipment());
-    run.pool.clear();
+    run.emptyWorld();
     put(run, 'obstacle', 'militante', 80, 0);
     kickOff(run);
     while (run.phase === 'flight' && !run.clingKind) run.step(DT);
@@ -244,12 +244,12 @@ describe('obstacles and boosters', () => {
 
   it('a bouncer adds vertical speed, scaled by the soles level', () => {
     const base = new Run(4, defaultEquipment());
-    base.pool.clear();
+    base.emptyWorld();
     put(base, 'bouncer', 'pigeon', 100, 0);
     kickOff(base);
     playToEnd(base);
     const soles = new Run(4, { ...defaultEquipment(), solesLevel: 4 });
-    soles.pool.clear();
+    soles.emptyWorld();
     put(soles, 'bouncer', 'pigeon', 100, 0);
     kickOff(soles);
     playToEnd(soles);
@@ -259,7 +259,7 @@ describe('obstacles and boosters', () => {
 
   it('a speed booster multiplies the velocity and removes drag for its duration', () => {
     const run = new Run(4, defaultEquipment());
-    run.pool.clear();
+    run.emptyWorld();
     put(run, 'booster', 'video', 100, 0);
     kickOff(run);
     let before = 0;
@@ -274,7 +274,7 @@ describe('obstacles and boosters', () => {
 
   it('the sound barrier makes the character immune to obstacles', () => {
     const run = new Run(4, defaultEquipment());
-    run.pool.clear();
+    run.emptyWorld();
     put(run, 'obstacle', 'gendarme', 100, 0);
     kickOff(run);
     run.body.vx = 400; // breaks the barrier on the next step
@@ -282,5 +282,43 @@ describe('obstacles and boosters', () => {
     expect(run.barrierTime).toBeGreaterThan(0);
     for (let i = 0; i < 1 / DT && run.phase === 'flight'; i++) run.step(DT);
     expect(run.endReason).not.toBe('fatal');
+  });
+});
+
+describe('aerial spawns follow the path', () => {
+  it('predicts the ballistic altitude ahead and falls back to the start altitude when not moving', () => {
+    expect(predictY(0, 50, 0, 0, 300)).toBe(50);
+    const g = BALANCE.physics.gravity;
+    expect(predictY(0, 10, 50, 40, 100)).toBeCloseTo(10 + 40 * 2 - 0.5 * g * 4, 6);
+    expect(predictY(0, 1, 50, -40, 500)).toBe(0);
+  });
+
+  it('places bouncers and boosters in a band around the predicted path, not under it', () => {
+    const pool = new EntityPool();
+    const sp = new Spawner(pool, 'depart');
+    sp.reset();
+    const S = BALANCE.spawn;
+    // Moving fast and level at 300 m: the band must stay around 300 m for every chunk ahead.
+    sp.advance(new Rng(9), 0, 300, 80, 0);
+    const spread = S.airSpreadBase + 300 * S.airSpreadFactor;
+    const aerial = pool.items.filter((e) => e.active && (e.type === 'bouncer' || e.type === 'booster'));
+    expect(aerial.length).toBeGreaterThan(0);
+    for (const e of aerial) {
+      const x = e.x;
+      const yp = predictY(0, 300, 80, 0, x);
+      expect(e.y).toBeGreaterThanOrEqual(yp - spread - 2 * S.airSpreadFactor * 100 - 1);
+      expect(e.y).toBeLessThanOrEqual(yp + spread + 2 * S.airSpreadFactor * 100 + 1);
+    }
+  });
+
+  it('gives boosters and obstacles at least the size of the character', () => {
+    const S = BALANCE.spawn.sizes;
+    expect(S.booster.w).toBeGreaterThanOrEqual(BALANCE.player.width);
+    expect(S.booster.h).toBeGreaterThanOrEqual(BALANCE.player.height);
+    expect(S.obstacle.w).toBeGreaterThanOrEqual(BALANCE.player.width);
+    expect(S.obstacle.h).toBeGreaterThanOrEqual(BALANCE.player.height);
+    for (const k of ['pigeon', 'ballon', 'mouette', 'drone'] as const) {
+      expect(BALANCE.bouncers[k].w * BALANCE.bouncers[k].h).toBeGreaterThanOrEqual(BALANCE.player.width * BALANCE.player.height);
+    }
   });
 });

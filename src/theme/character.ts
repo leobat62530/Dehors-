@@ -40,9 +40,14 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, look: Look, pose: n
 
   // ---- limbs behind the torso -----------------------------------------------------
   if (rolling) {
-    // Curled up: limbs hug the body, only the shoes peek out.
-    drawShoe(ctx, shoes, shoeColour, -0.55, -0.72, 0.4);
-    drawShoe(ctx, shoes, shoeColour, 0.25, -0.78, -0.2);
+    // Face-first skid: legs kicking in the air behind, one arm scraping the ground ahead.
+    const f = flutter * 0.15;
+    limb(ctx, legColour, -0.7, 0.0, -1.25, 0.55 + f, -1.15, 1.25 - f, outfit.legs);
+    limb(ctx, legColour, -0.5, 0.15, -0.85, 0.85 - f, -0.3, 1.4 + f, outfit.legs);
+    drawShoe(ctx, shoes, shoeColour, -1.15, 1.25 - f, 2.6);
+    drawShoe(ctx, shoes, shoeColour, -0.3, 1.4 + f, 2.2);
+    limb(ctx, sleeve, 0.2, -0.2, -0.15, 0.45, 0.35, 0.9, 'none', THEME.body);
+    hand(ctx, 0.35, 0.9);
   } else if (standing) {
     // Upright: legs straight down, arms raised in a V.
     limb(ctx, legColour, -0.28, -0.2, -0.34, -0.75, -0.32, -1.3, outfit.legs);
@@ -77,12 +82,13 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, look: Look, pose: n
   ctx.save();
   ctx.translate(0, bob);
   const tw = rolling ? 1.7 : standing ? 1.1 : 1.8;
-  const th = rolling ? 1.4 : standing ? 1.3 : 1.0;
-  const tx = rolling ? -1.0 : standing ? -0.55 : -1.0;
-  const ty = standing ? 0.15 : 0;
+  const th = rolling ? 1.0 : standing ? 1.3 : 1.0;
+  const tx = rolling ? -0.85 : standing ? -0.55 : -1.0;
+  const ty = standing ? 0.15 : rolling ? -0.35 : 0;
   ctx.translate(0, ty);
+  if (rolling) ctx.rotate(-0.42);
   ctx.fillStyle = top;
-  roundRect(ctx, tx, -th / 2, tw, th, rolling ? 0.6 : 0.46);
+  roundRect(ctx, tx, -th / 2, tw, th, 0.46);
   ctx.fill();
   ctx.stroke();
   // Belly shade and shoulder highlight give the body some volume.
@@ -92,7 +98,7 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, look: Look, pose: n
   ctx.fillStyle = LIGHT;
   roundRect(ctx, tx + 0.25, th / 2 - 0.3, tw * 0.5, 0.16, 0.08);
   ctx.fill();
-  if (!rolling) drawTopDetails(ctx, outfit.top, top, legs, standing);
+  drawTopDetails(ctx, outfit.top, top, legs, standing);
   if (outfit.accessory === 'sacoche' && !rolling) {
     ctx.strokeStyle = '#3b2a1a';
     ctx.lineWidth = 0.18;
@@ -123,8 +129,8 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, look: Look, pose: n
   ctx.restore();
 
   // ---- head ---------------------------------------------------------------------------
-  const headX = rolling ? 0.8 : standing ? 0.05 : 1.15;
-  const headY = (rolling ? 0.35 : standing ? 1.45 : flying ? 0.45 : 0.4) + bob;
+  const headX = rolling ? 1.3 : standing ? 0.05 : 1.15;
+  const headY = (rolling ? -0.58 : standing ? 1.45 : flying ? 0.45 : 0.4) + bob;
   const R = 0.72;
   drawHair(ctx, look.hair, headX, headY, R, 'back');
   if (outfit.top === 'sweat') {
@@ -271,21 +277,30 @@ function drawFace(ctx: CanvasRenderingContext2D, hx: number, hy: number, r: numb
   const ey = hy + r * 0.12;
   ctx.lineWidth = OUT;
   if (pose === CHARACTER_POSE.roll) {
-    // Dizzy: crossed eyes and a wobbly mouth.
+    // Skidding on the face: eyes squeezed shut, teeth gritted, cheek scraping.
     ctx.strokeStyle = THEME.outline;
     ctx.lineWidth = 0.1;
     for (const ox of [-0.12, 0.3]) {
       ctx.beginPath();
-      ctx.moveTo(ex + ox - 0.1, ey - 0.1);
-      ctx.lineTo(ex + ox + 0.1, ey + 0.1);
-      ctx.moveTo(ex + ox - 0.1, ey + 0.1);
-      ctx.lineTo(ex + ox + 0.1, ey - 0.1);
+      ctx.moveTo(ex + ox - 0.12, ey + 0.1);
+      ctx.lineTo(ex + ox, ey - 0.02);
+      ctx.lineTo(ex + ox + 0.12, ey + 0.1);
       ctx.stroke();
     }
-    ctx.beginPath();
-    ctx.moveTo(ex - 0.1, ey - 0.4);
-    ctx.quadraticCurveTo(ex + 0.1, ey - 0.3, ex + 0.3, ey - 0.42);
+    ctx.fillStyle = '#ffffff';
+    roundRect(ctx, ex - 0.08, ey - 0.46, 0.5, 0.18, 0.05);
+    ctx.fill();
     ctx.stroke();
+    ctx.beginPath();
+    for (let i = 1; i < 4; i++) {
+      ctx.moveTo(ex - 0.08 + i * 0.125, ey - 0.46);
+      ctx.lineTo(ex - 0.08 + i * 0.125, ey - 0.28);
+    }
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(220,80,80,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(ex - 0.15, ey - 0.25, 0.14, 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
     ctx.lineWidth = OUT;
     return;
   }

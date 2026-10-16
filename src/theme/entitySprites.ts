@@ -566,7 +566,7 @@ export function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, t: number, 
   }
   if (e.type === 'coin') {
     // Gold disc, bobbing; bigger when it is worth more. Pops upward when picked.
-    const r = 0.5 + Math.min(4, e.value - 1) * 0.08;
+    const r = (e.w / 2) * (1 + Math.min(4, e.value - 1) * 0.12);
     const bob = Math.sin(t * 4 + e.seed * 6) * 0.12;
     ctx.save();
     if (e.used) {

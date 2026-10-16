@@ -2,13 +2,15 @@
  * Short synthesised sounds on WebAudio. No file, no dependency. The context opens on the first
  * user gesture, pauses when the tab is hidden, and respects the mute setting.
  */
-export type SoundKind = 'kick' | 'bounce' | 'coin' | 'obstacle' | 'wall' | 'crash' | 'barrier' | 'rocket' | 'buy' | 'record' | 'tap' | 'trophy';
+export type SoundKind = 'kick' | 'bounce' | 'coin' | 'obstacle' | 'wall' | 'crash' | 'barrier' | 'rocket' | 'buy' | 'record' | 'tap' | 'trophy' | 'helmet';
 
 export class Sounds {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   enabled = true;
   volume = 0.8;
+  private skidGain: GainNode | null = null;
+  private skidFilter: BiquadFilterNode | null = null;
 
   /** Call from a pointer handler: browsers refuse audio before a gesture. */
   unlock(): void {
@@ -84,7 +86,49 @@ export class Sounds {
       case 'tap':
         this.tone(600, 0.04, 'square', 0.08);
         break;
+      case 'helmet':
+        // The helmet cracks: a sharp snap, then two falling notes.
+        this.noise(0.08, 0.9, 5000);
+        this.tone(1400, 0.12, 'square', 0.25, 400);
+        this.tone(900, 0.3, 'triangle', 0.3, 180, 0.06);
+        break;
     }
+  }
+
+  /**
+   * Skid loop while the character scrapes the ground: `level` 0 stops it, otherwise it sets the
+   * loudness and pitch. Safe to call every frame; the loop is created on first use and reused.
+   */
+  skid(level: number): void {
+    if (!this.ctx || !this.master || this.ctx.state !== 'running' || !this.enabled) level = 0;
+    if (level <= 0) {
+      if (this.skidGain) this.skidGain.gain.setTargetAtTime(0, this.ctx?.currentTime ?? 0, 0.05);
+      return;
+    }
+    const ctx = this.ctx!;
+    if (!this.skidGain) {
+      const length = Math.floor(ctx.sampleRate * 0.6);
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.Q.value = 1.2;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(this.master!);
+      src.start();
+      this.skidGain = g;
+      this.skidFilter = filter;
+    }
+    const k = Math.min(1, level);
+    this.skidFilter!.frequency.setTargetAtTime(600 + 1800 * k, ctx.currentTime, 0.05);
+    this.skidGain.gain.setTargetAtTime(0.12 + 0.4 * k, ctx.currentTime, 0.05);
   }
 
   private tone(freq: number, seconds: number, type: OscillatorType, gain: number, slideTo?: number, delay = 0): void {

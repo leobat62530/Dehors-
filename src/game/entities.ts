@@ -110,12 +110,29 @@ export class Spawner {
     this.pool.clear();
   }
 
-  /** Generate everything up to `frontX + lookahead`, placing aerial spawns around altitude `y`. */
-  advance(rng: Rng, frontX: number, y: number): void {
+  /** Stops generation for good (tests build their own world). `reset` re-arms it. */
+  freeze(): void {
+    this.generatedX = Number.POSITIVE_INFINITY;
+  }
+
+  /** Before the kick: only the first metres exist, so what comes next can follow the real trajectory. */
+  prime(rng: Rng, frontX: number): void {
+    const S = BALANCE.spawn;
+    while (this.generatedX < frontX + S.lookaheadStart) {
+      this.chunk(rng, this.generatedX, 0);
+      this.generatedX += S.chunk;
+    }
+  }
+
+  /**
+   * Generate everything up to `frontX + lookahead`. Aerial spawns sit around the path the
+   * character will follow from (frontX, y) at velocity (vx, vy), so bonuses are where it flies.
+   */
+  advance(rng: Rng, frontX: number, y: number, vx = 0, vy = 0): void {
     const S = BALANCE.spawn;
     const target = frontX + S.lookahead;
     while (this.generatedX < target) {
-      this.chunk(rng, this.generatedX, y);
+      this.chunk(rng, this.generatedX, predictY(frontX, y, vx, vy, this.generatedX + S.chunk / 2));
       this.generatedX += S.chunk;
     }
   }
@@ -127,19 +144,21 @@ export class Spawner {
     const table: StageSpawn = S.stages[stage.id];
     const inTroposphere = y < BALANCE.altitude.tropopause;
     const layer = LAYERS[layerIndexAt(y)] ?? LAYERS[0]!;
-    const bandTop = Math.min(S.airBandMax, S.airBandBase + y * S.airBandFactor + 60);
-    const bandBottom = Math.max(2, y * 0.35);
+    const spread = S.airSpreadBase + y * S.airSpreadFactor;
+    const bandTop = y + spread;
+    const bandBottom = Math.max(2, y - spread);
     const scale = S.chunk / 100;
+    const size = S.sizes.scale;
 
     // Bouncers: the country's table in the troposphere, the layer's table above.
     const bouncerTable = inTroposphere ? table.kinds : S.layers[layer.id].kinds;
-    const bouncerDensity = inTroposphere ? table.bouncers : S.layers[layer.id].bouncers;
+    const bouncerDensity = (inTroposphere ? table.bouncers : S.layers[layer.id].bouncers) * S.densityScale.bouncers;
     const nb = poisson(rng, bouncerDensity * scale);
     for (let i = 0; i < nb; i++) {
       const kind = pickWeighted(rng, bouncerTable as Record<string, number>) as BouncerKind | null;
       if (!kind) continue;
       const def = BALANCE.bouncers[kind];
-      this.place('bouncer', kind, rng.range(cx, cx + S.chunk), inTroposphere ? rng.range(bandBottom, bandTop) : rng.range(y - 400, y + 400), def.w, def.h, rng, stageIndex);
+      this.place('bouncer', kind, rng.range(cx, cx + S.chunk), rng.range(bandBottom, bandTop), def.w * size, def.h * size, rng, stageIndex);
     }
 
     if (inTroposphere) {
@@ -152,7 +171,7 @@ export class Spawner {
       // Boosters: the character's own, plus the country's.
       const profile = BALANCE.profiles[this.profile];
       const placeList = (BALANCE.placeBoosters as Record<string, readonly string[]>)[stage.id];
-      const nBoost = poisson(rng, table.boosters * scale);
+      const nBoost = poisson(rng, table.boosters * S.densityScale.boosters * scale);
       for (let i = 0; i < nBoost; i++) {
         let kind: string;
         if (placeList && placeList.length > 0 && rng.next() < S.placeBoosterShare) {
@@ -160,11 +179,11 @@ export class Spawner {
         } else {
           kind = profile.boosters[rng.int(0, profile.boosters.length - 1)] as string;
         }
-        this.place('booster', kind, rng.range(cx, cx + S.chunk), rng.range(bandBottom, bandTop), 2, 2, rng, stageIndex);
+        this.place('booster', kind, rng.range(cx, cx + S.chunk), rng.range(bandBottom, bandTop), S.sizes.booster.w * size, S.sizes.booster.h * size, rng, stageIndex);
       }
 
       // Obstacles: only the kinds of the character in play, harder ones more frequent along the track.
-      const nObs = poisson(rng, table.obstacles * scale);
+      const nObs = poisson(rng, table.obstacles * S.densityScale.obstacles * scale);
       const progress = Math.min(1, stageIndex / (STAGES.length - 1));
       const hardShare = S.hardShareStart + (S.hardShareEnd - S.hardShareStart) * progress;
       for (let i = 0; i < nObs; i++) {
@@ -175,7 +194,7 @@ export class Spawner {
         });
         if (candidates.length === 0) continue;
         const kind = candidates[rng.int(0, candidates.length - 1)] as string;
-        this.place('obstacle', kind, rng.range(cx, cx + S.chunk), rng.range(bandBottom, bandTop), 2.4, 2.6, rng, stageIndex);
+        this.place('obstacle', kind, rng.range(cx, cx + S.chunk), rng.range(bandBottom, bandTop), S.sizes.obstacle.w * size, S.sizes.obstacle.h * size, rng, stageIndex);
       }
 
       // Coin clusters: a short line or arc, face value growing with the stage.
@@ -193,10 +212,10 @@ export class Spawner {
           if (!e) break;
           e.type = 'coin';
           e.kind = 'coin';
-          e.x = x0 + i * 2.2;
+          e.x = x0 + i * S.sizes.coin * 1.7 * size;
           e.y = yy;
-          e.w = 1;
-          e.h = 1;
+          e.w = S.sizes.coin * size;
+          e.h = S.sizes.coin * size;
           e.seed = rng.next();
           e.stageIndex = stageIndex;
           e.value = value;
@@ -224,6 +243,13 @@ export class Spawner {
     e.seed = rng.next();
     e.stageIndex = stageIndex;
   }
+}
+
+/** Altitude of a ballistic path from (x0, y0) at (vx, vy) when it reaches `x`; the start altitude when not moving forward. */
+export function predictY(x0: number, y0: number, vx: number, vy: number, x: number): number {
+  if (vx < 1) return Math.max(0, y0);
+  const t = Math.max(0, (x - x0) / vx);
+  return Math.max(0, y0 + vy * t - 0.5 * BALANCE.physics.gravity * t * t);
 }
 
 /** Axis-aligned overlap between the character box and an entity box (both bottom-centre anchored), grown by `pad` metres. */
