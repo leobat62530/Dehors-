@@ -26,8 +26,8 @@ function play(eq: Equipment, power: number, angle: number, seed = 1): Run {
   run.release();
   for (let i = 0; i < 600 / DT && run.phase !== 'ended'; i++) {
     run.step(DT);
-    // A player fires the rocket on the way down, while still high.
-    if (run.phase === 'flight' && run.rocketCharges > 0 && run.body.vy < 0 && run.body.y > 5) run.tap();
+    // A player holds the rocket on the way down, while still high, until the fuel is gone.
+    if (run.phase === 'flight') run.setThrust(run.rocketFuel > 0 && run.body.vy < 0 && run.body.y > 5);
   }
   return run;
 }

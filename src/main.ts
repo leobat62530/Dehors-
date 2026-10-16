@@ -32,6 +32,10 @@ async function main(): Promise<void> {
 
   const app = new App(canvas, store, { telegram: tg, insets });
   attachPointer(canvas, app);
+  // Leaving the app (home gesture, a call) pauses a flight; only the play button resumes it.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) app.hide();
+  });
   window.addEventListener('resize', () => app.resize());
   tg?.onEvent?.('viewportChanged', () => app.resize());
 

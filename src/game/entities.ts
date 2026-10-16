@@ -115,6 +115,11 @@ export class Spawner {
     this.generatedX = Number.POSITIVE_INFINITY;
   }
 
+  /** True when another bonus or malus already sits within `minGap` of (x, y): the spot is skipped. */
+  private crowded(x: number, y: number): boolean {
+    return tooClose(this.pool.items, x, y, BALANCE.spawn.minGap);
+  }
+
   /** Before the kick: only the first metres exist, so what comes next can follow the real trajectory. */
   prime(rng: Rng, frontX: number): void {
     const S = BALANCE.spawn;
@@ -146,7 +151,7 @@ export class Spawner {
     const layer = LAYERS[layerIndexAt(y)] ?? LAYERS[0]!;
     const spread = S.airSpreadBase + y * S.airSpreadFactor;
     const bandTop = y + spread;
-    const bandBottom = Math.max(2, y - spread);
+    const bandBottom = Math.max(S.airBandFloor, y - spread);
     const scale = S.chunk / 100;
     const size = S.sizes.scale;
 
@@ -232,6 +237,7 @@ export class Spawner {
   }
 
   private place(type: EntityType, kind: string, x: number, y: number, w: number, h: number, rng: Rng, stageIndex: number): void {
+    if (type !== 'wall' && this.crowded(x, y)) return;
     const e = this.pool.alloc();
     if (!e) return;
     e.type = type;
@@ -243,6 +249,18 @@ export class Spawner {
     e.seed = rng.next();
     e.stageIndex = stageIndex;
   }
+}
+
+/** Spawn helpers below: nothing allocates, the pool is scanned in place. */
+export function tooClose(items: readonly Entity[], x: number, y: number, gap: number): boolean {
+  const g2 = gap * gap;
+  for (const o of items) {
+    if (!o.active || o.type === 'coin' || o.type === 'wall') continue;
+    const dx = o.x - x;
+    const dy = o.y - y;
+    if (dx * dx + dy * dy < g2) return true;
+  }
+  return false;
 }
 
 /** Altitude of a ballistic path from (x0, y0) at (vx, vy) when it reaches `x`; the start altitude when not moving forward. */

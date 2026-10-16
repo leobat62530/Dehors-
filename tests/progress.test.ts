@@ -102,16 +102,41 @@ describe('equipment in a run', () => {
     expect(suit.distance).toBeGreaterThan(base.distance * 1.1);
   });
 
-  it('a tap fires the rocket when no clinger is on board, once per charge', () => {
-    const run = new Run(1, { ...defaultEquipment(), rocketCharges: 1 });
+  it('the rocket burns only while the finger holds, and its fuel is one bar for every charge', () => {
+    const fuel = BALANCE.upgradeEffects.rocketFuelPerCharge;
+    const run = new Run(1, { ...defaultEquipment(), rocketCharges: 2 });
+    const twin = new Run(1, defaultEquipment());
     run.emptyWorld();
+    twin.emptyWorld();
     kickOff(run);
-    for (let i = 0; i < 0.5 / DT; i++) run.step(DT);
-    const v = Math.hypot(run.body.vx, run.body.vy);
-    expect(run.tap()).toBe(true);
-    expect(Math.hypot(run.body.vx, run.body.vy)).toBeGreaterThan(v * 1.8);
+    kickOff(twin);
+    expect(run.rocketFuel).toBeCloseTo(2 * fuel, 6);
+    expect(run.rocketCharges).toBe(2);
+    for (let i = 0; i < 0.5 / DT; i++) {
+      run.step(DT);
+      twin.step(DT);
+    }
+    expect(run.setThrust(true)).toBe(true);
+    expect(run.setThrust(true)).toBe(false);
+    for (let i = 0; i < 0.3 / DT; i++) {
+      run.step(DT);
+      twin.step(DT);
+    }
+    expect(run.rocketFuel).toBeCloseTo(2 * fuel - 0.3, 2);
+    expect(run.body.vx).toBeGreaterThan(twin.body.vx);
+    expect(run.rocketsUsed).toBe(1);
+    // Released: nothing burns.
+    run.setThrust(false);
+    for (let i = 0; i < 0.3 / DT; i++) run.step(DT);
+    expect(run.rocketFuel).toBeCloseTo(2 * fuel - 0.3, 2);
+    expect(run.rocketBurning).toBe(false);
+    // Held until empty: the bar reaches zero, the charges with it, and holding further does nothing.
+    run.setThrust(true);
+    for (let i = 0; i < (2 * fuel + 1) / DT && run.phase === 'flight'; i++) run.step(DT);
+    expect(run.rocketFuel).toBe(0);
     expect(run.rocketCharges).toBe(0);
-    expect(run.tap()).toBe(false);
+    expect(run.rocketBurning).toBe(false);
+    expect(run.rocketsUsed).toBe(2);
   });
 
   it('the magnet picks up coins from further away', () => {

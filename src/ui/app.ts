@@ -241,6 +241,7 @@ export class App implements PointerListener {
   private readonly endShopButton = btn();
   private readonly endHomeButton = btn();
   private readonly pauseButton = btn();
+  private readonly resumeButton = btn();
   private readonly speedButton = btn();
   private readonly playButton = btn();
   private readonly homeShopButton = btn();
@@ -463,7 +464,8 @@ export class App implements PointerListener {
 
     // home
     Object.assign(this.labButton, { x: 12, y: 12 + T, w: 72, h: 34 });
-    Object.assign(this.pauseLabButton, { x: bx + bw / 4, y: H * 0.45 + 80, w: bw / 2, h: 48 });
+    Object.assign(this.resumeButton, { x: bx + bw / 4, y: H * 0.45 + 24, w: bw / 2, h: 60 });
+    Object.assign(this.pauseLabButton, { x: bx + bw / 4, y: H * 0.45 + 100, w: bw / 2, h: 48 });
     Object.assign(this.playButton, { x: bx, y: H * 0.5, w: bw, h: 72 });
     Object.assign(this.homeShopButton, { x: bx, y: H * 0.5 + 86, w: bw / 2 - 6, h: 54 });
     Object.assign(this.giftButton, { x: bx + bw / 2 + 6, y: H * 0.5 + 86, w: bw / 2 - 6, h: 54 });
@@ -547,12 +549,14 @@ export class App implements PointerListener {
       }
       return;
     }
-    if (run.phase === 'flight' && this.paused && this.save.settings.lab && inside(this.pauseLabButton, x, y)) {
-      this.lab?.open();
+    if (run.phase === 'flight' && this.paused) {
+      // Paused: only the play button resumes, so a stray touch (leaving the app, a swipe) changes nothing.
+      if (this.save.settings.lab && inside(this.pauseLabButton, x, y)) this.lab?.open();
+      else if (inside(this.resumeButton, x, y)) this.paused = false;
       return;
     }
-    if (run.phase === 'flight' && (this.paused || inside(this.pauseButton, x, y))) {
-      this.paused = !this.paused;
+    if (run.phase === 'flight' && inside(this.pauseButton, x, y)) {
+      this.pause();
       return;
     }
     if (run.phase === 'flight' && inside(this.speedButton, x, y)) {
@@ -560,8 +564,10 @@ export class App implements PointerListener {
       return;
     }
     if (run.phase === 'flight') {
-      // Any other tap in flight is an action tap: shake off a clinger, or fire the rocket.
-      if (run.tap() && run.clingKind) this.shake = 0.6;
+      // Any other touch in flight: shake off a clinger by tapping, or hold to burn the rocket.
+      if (run.clingKind) {
+        if (run.tap()) this.shake = 0.6;
+      } else run.setThrust(true);
       return;
     }
     if (run.phase === 'aim') {
@@ -607,12 +613,40 @@ export class App implements PointerListener {
       }
       return;
     }
+    if (this.screen === 'game' && this.run.phase === 'flight') {
+      this.run.setThrust(false);
+      return;
+    }
     if (this.screen !== 'game' || !this.run.aiming) return;
     if (this.run.release()) {
       this.sounds.play('kick');
       // Gadgets armed for this run are spent at the kick.
       if (consumeGadgets(this.save).length > 0) this.persist();
     }
+  }
+
+  /** Pauses a flight; the rocket lets go so it never burns unattended. */
+  pause(): void {
+    if (this.screen !== 'game' || this.run.phase !== 'flight') return;
+    this.paused = true;
+    this.run.setThrust(false);
+  }
+
+  /** The app left the screen (home gesture, call, another app): a flight waits for the play button. */
+  hide(): void {
+    this.pause();
+  }
+
+  /** Opens the tuning lab and turns it on if it was not yet, so its overrides load at the next start. */
+  private openLab(): void {
+    const s = this.save.settings;
+    if (!s.lab) {
+      s.lab = true;
+      loadLab();
+      this.persist();
+      this.relayout = true;
+    }
+    this.lab?.open();
   }
 
   private updateAim(): void {
@@ -1006,12 +1040,15 @@ export class App implements PointerListener {
       ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = 1;
       drawStars(ctx, W, H, layer.stars * blend, this.camX);
-      // Planet curvature far below: a wide arc whose top sinks with the altitude.
-      const curveTop = H * (0.75 + Math.min(0.5, Math.log10(1 + y / tropo) * 0.12));
-      ctx.fillStyle = layer.horizon;
-      ctx.beginPath();
-      ctx.ellipse(W / 2, curveTop + W * 1.5, W * 1.6, W * 1.5, 0, Math.PI, 0);
-      ctx.fill();
+      // Planet curvature far below, from orbit up. The stratosphere is still the sky: it only
+      // changes colour, the ground stays where it is.
+      if (layerId !== 'stratosphere') {
+        const curveTop = H * (0.75 + Math.min(0.5, Math.log10(1 + y / tropo) * 0.12));
+        ctx.fillStyle = layer.horizon;
+        ctx.beginPath();
+        ctx.ellipse(W / 2, curveTop + W * 1.5, W * 1.6, W * 1.5, 0, Math.PI, 0);
+        ctx.fill();
+      }
     }
   }
 
@@ -1099,10 +1136,47 @@ export class App implements PointerListener {
       const b = run.body;
       pose = b.rolling ? CHARACTER_POSE.roll : CHARACTER_POSE.flight;
       if (b.rolling) ctx.translate(0, Math.sin(run.time * 40) * 0.04 * Math.min(1, Math.abs(b.vx) / 20));
-      else ctx.rotate(Math.atan2(b.vy, Math.max(1, b.vx)) * 0.8);
+      else {
+        ctx.rotate(Math.atan2(b.vy, Math.max(1, b.vx)) * 0.8);
+        this.drawFlames(speedOf(b), run.rocketBurning, run.time);
+      }
     }
     drawCharacter(ctx, this.save.profile, pose, run.time);
     ctx.restore();
+  }
+
+  /**
+   * Flames behind the character, in sprite space (metres, facing right): orange from
+   * `flameSpeed`, longer with speed, blue-white past `flameHotSpeed`; always on while the rocket burns.
+   */
+  private drawFlames(speed: number, burning: boolean, time: number): void {
+    const F = BALANCE.fx;
+    const heat = Math.max(0, Math.min(1, (speed - F.flameSpeed) / Math.max(1, F.flameHotSpeed - F.flameSpeed)));
+    if (!burning && speed < F.flameSpeed) return;
+    const hot = speed >= F.flameHotSpeed;
+    const flicker = 0.85 + 0.15 * Math.sin(time * 53) + 0.1 * Math.sin(time * 31);
+    const length = (burning ? 3.4 : 1.6 + 3 * heat) * flicker;
+    const half = (burning ? 0.7 : 0.45 + 0.35 * heat) * flicker;
+    const ctx = this.ctx;
+    const x0 = -0.9;
+    const outer = hot ? '#3fb6ff' : '#ff7a1a';
+    const inner = hot ? '#e6f7ff' : '#ffd166';
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = outer;
+    ctx.beginPath();
+    ctx.moveTo(x0, half);
+    ctx.quadraticCurveTo(x0 - length * 0.6, half * 0.6, x0 - length, 0);
+    ctx.quadraticCurveTo(x0 - length * 0.6, -half * 0.6, x0, -half);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = inner;
+    ctx.beginPath();
+    ctx.moveTo(x0, half * 0.5);
+    ctx.quadraticCurveTo(x0 - length * 0.3, half * 0.3, x0 - length * 0.55, 0);
+    ctx.quadraticCurveTo(x0 - length * 0.3, -half * 0.3, x0, -half * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   private drawBoot(ox: number, oy: number, scale: number): void {
@@ -1196,9 +1270,23 @@ export class App implements PointerListener {
         ctx.fillText(`⛑ ${run.helmetCharges}`, 64, y);
         y += 18;
       }
-      if (run.rocketCharges > 0) {
-        ctx.strokeText(`🚀 ${run.rocketCharges}`, 64, y);
-        ctx.fillText(`🚀 ${run.rocketCharges}`, 64, y);
+      const fuelMax = this.equipment.rocketCharges * BALANCE.upgradeEffects.rocketFuelPerCharge;
+      if (fuelMax > 0) {
+        // Rocket fuel: a bar that empties while the finger holds, lit orange while it burns.
+        ctx.strokeText('🚀', 64, y);
+        ctx.fillText('🚀', 64, y);
+        const bx = 64;
+        const bw = 72;
+        ctx.fillStyle = THEME.shade;
+        roundRect(ctx, bx, y + 20, bw, 9, 4);
+        ctx.fill();
+        const share = Math.max(0, Math.min(1, run.rocketFuel / fuelMax));
+        if (share > 0) {
+          ctx.fillStyle = run.rocketBurning ? '#ff7a1a' : THEME.accent;
+          roundRect(ctx, bx, y + 20, Math.max(5, bw * share), 9, 4);
+          ctx.fill();
+        }
+        ctx.fillStyle = THEME.uiText;
       }
     }
     if (run.phase === 'flight' && run.clingKind) {
@@ -1357,9 +1445,8 @@ export class App implements PointerListener {
     ctx.textBaseline = 'middle';
     ctx.font = font('display', 36);
     ctx.fillStyle = THEME.uiText;
-    ctx.fillText(t('pause'), this.width / 2, this.height * 0.45);
-    ctx.font = font('text', 16);
-    ctx.fillText(t('resume'), this.width / 2, this.height * 0.45 + 40);
+    ctx.fillText(t('pause'), this.width / 2, this.height * 0.45 - 30);
+    this.button(this.resumeButton, t('resume'), 'primary', 18, 'play');
     if (this.save.settings.lab) this.button(this.pauseLabButton, t('lab'), 'secondary', 15);
   }
 
@@ -2112,9 +2199,7 @@ export class App implements PointerListener {
       s.haptics = !s.haptics;
       this.persist();
     });
-    if (s.lab) {
-      toggle(t('lab'), t('open'), () => this.lab?.open());
-    }
+    toggle(t('lab'), t('open'), () => this.openLab());
     toggle(t('language'), t(`lang_${s.lang}` as TextKey), () => {
       s.lang = s.lang === 'fr' ? 'en' : 'fr';
       setLang(s.lang);

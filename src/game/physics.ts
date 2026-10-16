@@ -1,5 +1,5 @@
 import { BALANCE } from '../config/balance';
-import { dragKAt, gravityAt } from './atmosphere';
+import { dragFactorAt, dragKAt, gravityAt } from './atmosphere';
 import { stageAt } from './world';
 
 /** Point-mass body in world metres. y is altitude above the ground (up is positive). */
@@ -90,7 +90,17 @@ export function stepBody(b: Body, dt: number, onBounce?: BounceHook, env: Enviro
   const ry = b.vy;
   const rel = Math.hypot(rx, ry);
   b.vx += -k * rel * rx * dt;
-  b.vy += (-gravityAt(b.y) - k * rel * ry) * dt;
+  let ay = -gravityAt(b.y) - k * rel * ry;
+  // Falling: the air holds the character back towards its terminal speed, so a dive bells out
+  // instead of dropping straight down. Fades with the air, like the drag.
+  if (ry < 0 && P.fallTerminalSpeed > 0) {
+    const kFall = (P.gravity / (P.fallTerminalSpeed * P.fallTerminalSpeed)) * dragFactorAt(b.y) * env.dragScale;
+    const hold = kFall * ry * ry;
+    ay += hold;
+    // Part of it pushes forward too, so the character glides down at an angle instead of dropping.
+    b.vx += hold * P.glideRatio * dt;
+  }
+  b.vy += ay * dt;
   b.x += b.vx * dt;
   b.y += b.vy * dt;
 

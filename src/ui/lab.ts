@@ -42,6 +42,8 @@ export const LAB_GROUPS: readonly LabGroup[] = [
       P('physics.rollThreshold', 'Vitesse d’impact qui déclenche la glissade', 0, 20, 0.5),
       P('physics.rollFrictionPerSecond', 'Vitesse gardée par seconde de glissade', 0.5, 1, 0.01),
       P('physics.rollResistance', 'Freinage constant en glissade (m/s²)', 0, 20, 0.5),
+      P('physics.fallTerminalSpeed', 'Vitesse de chute maxi dans l’air (m/s)', 10, 300, 1),
+      P('physics.glideRatio', 'Plané en chute (part poussée vers l’avant)', 0, 0.6, 0.01),
       P('end.minSpeed', 'Vitesse en dessous de laquelle la course s’arrête', 0, 10, 0.1),
     ],
   },
@@ -51,6 +53,7 @@ export const LAB_GROUPS: readonly LabGroup[] = [
       P('spawn.densityScale.bouncers', 'Densité des rebondisseurs (×)', 0, 5, 0.1),
       P('spawn.densityScale.boosters', 'Densité des bonus (×)', 0, 5, 0.1),
       P('spawn.densityScale.obstacles', 'Densité des malus (×)', 0, 5, 0.1),
+      P('spawn.minGap', 'Distance mini entre bonus et malus (m)', 0, 60, 1),
       P('economy.clustersPer100m', 'Grappes de pièces par 100 m', 0, 6, 0.1),
       P('spawn.airSpreadBase', 'Bande autour de la trajectoire (m)', 2, 200, 1),
       P('spawn.airSpreadFactor', 'Bande : part de l’altitude', 0, 0.6, 0.01),
@@ -80,6 +83,16 @@ export const LAB_GROUPS: readonly LabGroup[] = [
     params: [
       P('walls.speedKept', 'Vitesse gardée en cassant un mur', 0.2, 1, 0.01),
       P('walls.thickness', 'Épaisseur des murs (m)', 1, 10, 0.5),
+    ],
+  },
+  {
+    title: 'Fusée et flammes',
+    params: [
+      P('upgradeEffects.rocketThrust', 'Poussée de la fusée (m/s²)', 5, 150, 1),
+      P('upgradeEffects.rocketFuelPerCharge', 'Carburant par charge (s)', 0.2, 6, 0.1),
+      P('upgradeEffects.rocketMinAngle', 'Angle mini de la poussée (°)', 0, 60, 1),
+      P('fx.flameSpeed', 'Flammes à partir de (m/s)', 20, 400, 5),
+      P('fx.flameHotSpeed', 'Flammes bleues à partir de (m/s)', 50, 800, 5),
     ],
   },
 ];

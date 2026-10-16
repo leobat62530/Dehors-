@@ -26,7 +26,7 @@ export interface Equipment {
   suitLevel: number;
   /** "Aimant": pickup radius. */
   magnetLevel: number;
-  /** "Fusée d'appoint": manual boosts per run. */
+  /** "Fusée d'appoint": fuel charges per run, each worth `rocketFuelPerCharge` seconds of thrust. */
   rocketCharges: number;
   /** "Tremplin": start further along the track. */
   rampLevel: number;
@@ -96,7 +96,10 @@ export class Run {
   helmetCharges = 0;
   lawyerCharges = 0;
   lawyerUsed = 0;
-  rocketCharges = 0;
+  /** Rocket fuel left (s of thrust) and whether the finger currently holds the thrust. */
+  rocketFuel = 0;
+  thrusting = false;
+  /** Times the rocket was lit this run. */
   rocketsUsed = 0;
   coinsPicked = 0;
 
@@ -174,7 +177,8 @@ export class Run {
     this.helmetCharges = this.equipment.helmetCharges;
     this.lawyerCharges = this.equipment.lawyerCharges;
     this.lawyerUsed = 0;
-    this.rocketCharges = this.equipment.rocketCharges;
+    this.rocketFuel = this.equipment.rocketCharges * BALANCE.upgradeEffects.rocketFuelPerCharge;
+    this.thrusting = false;
     this.rocketsUsed = 0;
     this.coinsPicked = 0;
     // "Tremplin de départ": the run starts further along the track.
@@ -224,25 +228,39 @@ export class Run {
     this.timeScaleIndex = this.timeScaleIndex >= maxIndex ? 0 : this.timeScaleIndex + 1;
   }
 
+  /** Charges still unburnt, for the HUD and the shop copy. */
+  get rocketCharges(): number {
+    return Math.max(0, Math.ceil(this.rocketFuel / BALANCE.upgradeEffects.rocketFuelPerCharge - 1e-9));
+  }
+
+  /** True while the rocket burns: the finger holds, fuel is left, and the character is airborne. */
+  get rocketBurning(): boolean {
+    return this.phase === 'flight' && this.thrusting && this.rocketFuel > 0;
+  }
+
   /**
-   * A tap during flight. With a clinger on board, three quick taps shake it off; otherwise the tap
-   * fires the rocket if a charge is left. Returns true when something happened.
+   * Hold or release the rocket. It pushes as long as the finger stays down and fuel is left, like
+   * a real rocket: the bar empties, nothing jumps. Returns true when the rocket lit up.
+   */
+  setThrust(on: boolean): boolean {
+    if (!on) {
+      this.thrusting = false;
+      return false;
+    }
+    if (this.thrusting) return false;
+    this.thrusting = true;
+    if (!this.rocketBurning) return false;
+    this.rocketsUsed++;
+    this.events.onRocket?.();
+    return true;
+  }
+
+  /**
+   * A tap during flight with a clinger on board: three quick taps shake it off. Returns true when
+   * it let go.
    */
   tap(): boolean {
-    if (this.phase !== 'flight') return false;
-    if (!this.clingKind) {
-      if (this.rocketCharges <= 0 || this.body.rolling) return false;
-      const R = BALANCE.upgradeEffects;
-      this.rocketCharges--;
-      this.rocketsUsed++;
-      this.body.vx *= R.rocketBoost;
-      this.body.vy = Math.max(this.body.vy, 0) * R.rocketBoost + 5;
-      this.body.rolling = false;
-      this.boostTime = Math.max(this.boostTime, R.rocketSeconds);
-      this.boostKind = 'jet';
-      this.events.onRocket?.();
-      return true;
-    }
+    if (this.phase !== 'flight' || !this.clingKind) return false;
     const C = BALANCE.clinger;
     if (this.time - this.clingTapTime > C.tapWindowSeconds) this.clingTaps = 0;
     this.clingTapTime = this.time;
@@ -274,6 +292,7 @@ export class Run {
       case 'flight':
         this.time += dt;
         this.updateEffects(dt);
+        this.burn(dt);
         stepBody(this.body, dt, this.events.onBounce, this.env);
         this.collide(dt);
         this.track(dt);
@@ -281,6 +300,23 @@ export class Run {
         this.pool.cull(this.body.x - 200);
         return;
     }
+  }
+
+  /** Rocket thrust along the flight direction, never below `rocketMinAngle` above the horizon. */
+  private burn(dt: number): void {
+    if (!this.rocketBurning) return;
+    const R = BALANCE.upgradeEffects;
+    const b = this.body;
+    const used = Math.min(dt, this.rocketFuel);
+    this.rocketFuel -= used;
+    const minA = (R.rocketMinAngle * Math.PI) / 180;
+    const a = Math.max(minA, Math.atan2(b.vy, Math.max(1, b.vx)));
+    b.vx += Math.cos(a) * R.rocketThrust * used;
+    b.vy += Math.sin(a) * R.rocketThrust * used;
+    // Lit while skidding, it lifts the character off the ground again.
+    b.rolling = false;
+    b.onGround = false;
+    if (b.y <= 0) b.y = 0.01;
   }
 
   private updateEffects(dt: number): void {
@@ -464,7 +500,8 @@ export class Run {
 
     if (this.phase !== 'flight') return;
     if (b.onGround && v < BALANCE.end.minSpeed) this.end('stopped');
-    else if (this.noProgressTime >= BALANCE.end.noProgressSeconds) this.end('noProgress');
+    // Stalling ends the run on the ground; in the air the character always gets to land first.
+    else if (this.noProgressTime >= (b.onGround ? BALANCE.end.noProgressSeconds : BALANCE.end.airNoProgressSeconds)) this.end('noProgress');
   }
 
   private end(reason: EndReason): void {
