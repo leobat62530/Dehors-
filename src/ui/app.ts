@@ -3,16 +3,17 @@ import type { PointerListener } from '../core/input';
 import { newSeed } from '../core/rng';
 import { aimFromDrag } from '../game/kick';
 import { speedOf } from '../game/physics';
-import { Run } from '../game/run';
+import { defaultEquipment, Run } from '../game/run';
 import { type KeyValueStore, loadSave, type SaveData, writeSave } from '../game/save';
 import { GhostTrajectory } from '../game/trajectory';
 import { LAYERS, STAGES, stageAt } from '../game/world';
 import { ASSETS, POSE, roundRect } from '../theme/assets';
 import { LAYER_PALETTES, STAGE_PALETTES } from '../theme/palettes';
+import { drawEntity } from '../theme/entitySprites';
 import { drawBorderSign, drawLayerSign, drawScenery, drawStars } from '../theme/scenery';
 import { font, THEME } from '../theme/theme';
 import { formatAltitude, formatDistance, formatSpeedKmh } from './format';
-import { layerName, stageName, t } from './i18n';
+import { fatalText, helmetName, layerName, stageName, t } from './i18n';
 
 interface Button {
   x: number;
@@ -35,7 +36,7 @@ export class App implements PointerListener {
   private readonly save: SaveData;
   private readonly run: Run;
   private readonly ghost = new GhostTrajectory();
-  private kickLevel = 0;
+  private readonly equipment = defaultEquipment();
 
   // camera (world metres) and zoom
   private camX = 0;
@@ -63,6 +64,11 @@ export class App implements PointerListener {
   private layerSignIndex = 0;
   private layerSignRising = true;
   private flash = 0;
+  private lawyerTime = 0;
+  /** End screen helmet shop: one button per helmet. */
+  private readonly helmetButtons: Button[] = BALANCE.helmets.map(() => ({ x: 0, y: 0, w: 0, h: 0 }));
+  private shopOpen = false;
+  private readonly shopButton: Button = { x: 0, y: 0, w: 0, h: 0 };
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -72,7 +78,19 @@ export class App implements PointerListener {
     if (!ctx) throw new Error('Canvas 2D indisponible');
     this.ctx = ctx;
     this.save = loadSave(store);
-    this.run = new Run(newSeed(), this.kickLevel, {
+    this.equipment.helmetCharges = this.save.helmet?.charges ?? 0;
+    this.run = new Run(newSeed(), this.equipment, 'depart', {
+      onObstacle: (e) => {
+        this.shake = Math.min(1, this.shake + 0.5);
+        if (e.kind === 'radar') this.flash = 0.6;
+      },
+      onWall: (_e, broken) => {
+        this.shake = 1;
+        if (!broken) this.flash = 0.4;
+      },
+      onLawyer: () => {
+        this.lawyerTime = 2.5;
+      },
       onBounce: (impact) => {
         this.shake = Math.min(1, this.shake + impact / 60);
       },
@@ -112,6 +130,18 @@ export class App implements PointerListener {
     this.speedButton.h = 44;
     this.speedButton.x = this.width - 12 - this.speedButton.w;
     this.speedButton.y = this.height - 24 - this.speedButton.h;
+    this.shopButton.w = bw;
+    this.shopButton.h = 48;
+    this.shopButton.x = (this.width - bw) / 2;
+    this.shopButton.y = this.replayButton.y + this.replayButton.h + 42;
+    const panelW = Math.min(this.width - 32, 380);
+    const panelX = (this.width - panelW) / 2;
+    this.helmetButtons.forEach((b, i) => {
+      b.x = panelX + 16;
+      b.w = panelW - 32;
+      b.h = 40;
+      b.y = this.height * 0.2 + 56 + i * 46;
+    });
   }
 
   // ---- input -------------------------------------------------------------
@@ -119,7 +149,15 @@ export class App implements PointerListener {
   down(x: number, y: number): void {
     const run = this.run;
     if (run.phase === 'ended') {
+      if (this.shopOpen) {
+        this.helmetButtons.forEach((b, i) => {
+          if (inside(b, x, y)) this.buyHelmet(i);
+        });
+        if (inside(this.shopButton, x, y)) this.restart();
+        return;
+      }
       if (inside(this.replayButton, x, y)) this.restart();
+      else if (inside(this.shopButton, x, y)) this.shopOpen = true;
       return;
     }
     if (run.phase === 'flight' && (this.paused || inside(this.pauseButton, x, y))) {
@@ -128,6 +166,11 @@ export class App implements PointerListener {
     }
     if (run.phase === 'flight' && inside(this.speedButton, x, y)) {
       run.cycleTimeScale();
+      return;
+    }
+    if (run.phase === 'flight') {
+      // Any other tap in flight is an action tap: three quick ones shake off a clinger.
+      if (run.tap()) this.shake = 0.6;
       return;
     }
     if (run.phase === 'aim') {
@@ -156,13 +199,25 @@ export class App implements PointerListener {
   private updateAim(): void {
     const full = Math.min(this.width, this.height) * BALANCE.kick.fullPowerDragFraction;
     aimFromDrag(this.dragX - this.dragStartX, this.dragY - this.dragStartY, full, this.run.aim);
-    this.ghost.compute(launchSpeed(this.run.aim.power, this.kickLevel), this.run.aim.angle);
+    this.ghost.compute(launchSpeed(this.run.aim.power, this.equipment.kickLevel), this.run.aim.angle);
+  }
+
+  private buyHelmet(index: number): void {
+    const helmet = BALANCE.helmets[index];
+    if (!helmet || this.save.level < helmet.level || this.save.coins < helmet.price) return;
+    if (this.save.helmet && this.save.helmet.id === helmet.id) return;
+    this.save.coins -= helmet.price;
+    this.save.helmet = { id: helmet.id, charges: helmet.walls };
+    this.equipment.helmetCharges = helmet.walls;
+    writeSave(this.store, this.save);
   }
 
   private restart(): void {
     this.newRecord = false;
     this.newAltitudeRecord = false;
+    this.shopOpen = false;
     this.paused = false;
+    this.lawyerTime = 0;
     this.stageSignTime = 0;
     this.layerSignTime = 0;
     this.flash = 0;
@@ -185,6 +240,7 @@ export class App implements PointerListener {
     if (this.stageSignTime > 0) this.stageSignTime = Math.max(0, this.stageSignTime - dt);
     if (this.layerSignTime > 0) this.layerSignTime = Math.max(0, this.layerSignTime - dt);
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 2);
+    if (this.lawyerTime > 0) this.lawyerTime = Math.max(0, this.lawyerTime - dt);
 
     // camera follows with exponential damping, zooms out with speed
     const b = run.body;
@@ -214,6 +270,12 @@ export class App implements PointerListener {
       this.newAltitudeRecord = this.save.bestAltitude > 0;
       this.save.bestAltitude = run.maxAltitude;
     }
+    this.save.coins += run.coins + run.distanceCoins;
+    // The helmet keeps the charges it has left; consumed when none remain.
+    this.equipment.helmetCharges = run.helmetCharges;
+    if (this.save.helmet) {
+      this.save.helmet = run.helmetCharges > 0 ? { id: this.save.helmet.id, charges: run.helmetCharges } : null;
+    }
     writeSave(this.store, this.save);
   }
 
@@ -239,6 +301,7 @@ export class App implements PointerListener {
     drawScenery(ctx, W, this.camX, this.camY, this.zoom, originY);
     this.drawGround(originX, originY, scale);
     if (run.phase === 'aim' && run.aiming) this.drawGhost(originX, originY, scale);
+    this.drawEntities(originX, originY, scale);
     this.drawCharacter(px, py, originX, originY, scale);
     this.drawBoot(originX, originY, scale);
 
@@ -285,6 +348,30 @@ export class App implements PointerListener {
       ctx.beginPath();
       ctx.ellipse(W / 2, curveTop + W * 1.5, W * 1.6, W * 1.5, 0, Math.PI, 0);
       ctx.fill();
+    }
+  }
+
+  private drawEntities(ox: number, oy: number, scale: number): void {
+    const ctx = this.ctx;
+    const run = this.run;
+    const W = this.width;
+    const H = this.height;
+    const margin = 60;
+    // Small things stay readable when zoomed out, walls keep their true size.
+    const minScale = BALANCE.render.minCharacterPx / 2.4;
+    for (const e of run.pool.items) {
+      if (!e.active) continue;
+      const sx = ox + e.x * scale;
+      const sy = oy - e.y * scale;
+      const s = e.type === 'wall' ? scale : Math.max(scale, minScale);
+      if (sx + (e.w * s) / 2 < -margin || sx - (e.w * s) / 2 > W + margin) continue;
+      if (sy < -margin - e.h * s || sy > H + margin) continue;
+      if (e.used && e.usedTime > 0.7) continue;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.scale(s, -s);
+      drawEntity(ctx, e, run.time, (STAGES[e.stageIndex] ?? STAGES[0]!).id);
+      ctx.restore();
     }
   }
 
@@ -422,8 +509,48 @@ export class App implements PointerListener {
     ctx.textAlign = 'right';
     ctx.font = font('display', 20);
     ctx.fillStyle = THEME.accent;
-    ctx.strokeText('0 ●', W - 14, 20);
-    ctx.fillText('0 ●', W - 14, 20);
+    const coins = `${this.save.coins + (run.phase === 'ended' ? 0 : run.coins)} ●`;
+    ctx.strokeText(coins, W - 14, 20);
+    ctx.fillText(coins, W - 14, 20);
+    if (run.phase === 'flight' && run.coins > 0) {
+      ctx.font = font('text', 13);
+      ctx.fillStyle = THEME.uiText;
+      ctx.lineWidth = 3;
+      ctx.strokeText(`+${run.coins}`, W - 14, 46);
+      ctx.fillText(`+${run.coins}`, W - 14, 46);
+    }
+    if (run.phase === 'flight' && run.helmetCharges > 0) {
+      ctx.textAlign = 'left';
+      ctx.font = font('text', 13);
+      ctx.fillStyle = THEME.uiText;
+      ctx.lineWidth = 3;
+      const label = `⛑ ${run.helmetCharges}`;
+      ctx.strokeText(label, 64, 26);
+      ctx.fillText(label, 64, 26);
+    }
+    if (run.phase === 'flight' && run.clingKind) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = font('display', 26);
+      ctx.lineWidth = 5;
+      ctx.fillStyle = THEME.danger;
+      const pulse = 1 + Math.sin(run.time * 12) * 0.06;
+      ctx.save();
+      ctx.translate(W / 2, this.height * 0.42);
+      ctx.scale(pulse, pulse);
+      ctx.strokeText(`${t('shakeOff')} ${run.clingTaps}/${BALANCE.clinger.taps}`, 0, 0);
+      ctx.fillText(`${t('shakeOff')} ${run.clingTaps}/${BALANCE.clinger.taps}`, 0, 0);
+      ctx.restore();
+      ctx.textBaseline = 'top';
+    }
+    if (this.lawyerTime > 0) {
+      ctx.textAlign = 'center';
+      ctx.font = font('display', 18);
+      ctx.lineWidth = 4;
+      ctx.fillStyle = THEME.accent;
+      ctx.strokeText(t('lawyer'), W / 2, this.height * 0.36);
+      ctx.fillText(t('lawyer'), W / 2, this.height * 0.36);
+    }
 
     // "Above:" label once the layer sky has replaced the country sky.
     if (run.body.y >= BALANCE.altitude.tropopause) {
@@ -544,7 +671,14 @@ export class App implements PointerListener {
     ctx.textBaseline = 'top';
     ctx.fillStyle = THEME.uiTextSoft;
     ctx.font = font('text', 16);
-    ctx.fillText(t('endTitle'), W / 2, panelY + 20);
+    const cause =
+      run.endReason === 'fatal' && run.fatalKind ? fatalText(run.fatalKind) : run.endReason === 'wall' ? t('endWall') : t('endTitle');
+    ctx.fillStyle = run.endReason === 'fatal' || run.endReason === 'wall' ? THEME.danger : THEME.uiTextSoft;
+    ctx.fillText(cause, W / 2, panelY + 20);
+    if (this.shopOpen) {
+      this.drawShop(panelX, panelY);
+      return;
+    }
     ctx.fillStyle = THEME.accent;
     ctx.font = font('display', 52);
     ctx.fillText(formatDistance(run.distance), W / 2, panelY + 46);
@@ -563,6 +697,7 @@ export class App implements PointerListener {
       [t('endAltitude'), formatAltitude(run.maxAltitude)],
       [t('endLayer'), layerName(highest.id)],
       [t('endSpeed'), `${formatSpeedKmh(run.maxSpeed)} ${t('speedUnit')}`],
+      [t('coinsRun'), `+${run.coins + run.distanceCoins}`],
       [t('best'), `${formatDistance(this.save.bestDistance)} · ${formatAltitude(this.save.bestAltitude)}`],
     ];
     let y = panelY + 140;
@@ -592,5 +727,52 @@ export class App implements PointerListener {
     ctx.fillStyle = THEME.uiTextSoft;
     ctx.font = font('text', 11);
     ctx.fillText(`${t('seed')} ${run.seed}`, W / 2, btn.y + btn.h + 22);
+
+    const sb = this.shopButton;
+    ctx.fillStyle = THEME.ui;
+    roundRect(ctx, sb.x, sb.y, sb.w, sb.h, 14);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = THEME.accent;
+    ctx.stroke();
+    ctx.fillStyle = THEME.uiText;
+    ctx.font = font('display', 18);
+    const helmetLabel = this.save.helmet ? ` · ${helmetName(this.save.helmet.id)} ${this.save.helmet.charges}` : '';
+    ctx.fillText(`${t('shopHelmets')}${helmetLabel}`, W / 2, sb.y + sb.h / 2);
+  }
+
+  /** Minimal helmet shop on the end screen; the full shop with tabs arrives in phase 4. */
+  private drawShop(panelX: number, panelY: number): void {
+    const ctx = this.ctx;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.font = font('display', 16);
+    ctx.fillStyle = THEME.accent;
+    ctx.fillText(`${t('coinsTotal')} : ${this.save.coins} ●`, panelX + 16, panelY + 50);
+    BALANCE.helmets.forEach((helmet, i) => {
+      const b = this.helmetButtons[i]!;
+      const owned = this.save.helmet?.id === helmet.id;
+      const locked = this.save.level < helmet.level;
+      const affordable = this.save.coins >= helmet.price;
+      ctx.fillStyle = owned ? THEME.accent : locked ? 'rgba(255,255,255,0.08)' : affordable ? '#2a9d8f' : 'rgba(255,255,255,0.18)';
+      roundRect(ctx, b.x, b.y, b.w, b.h, 10);
+      ctx.fill();
+      ctx.fillStyle = owned ? THEME.ui : locked ? THEME.uiTextSoft : THEME.uiText;
+      ctx.font = font('text', 14);
+      ctx.textAlign = 'left';
+      ctx.fillText(`${helmetName(helmet.id)} · ${helmet.walls} ${t('walls')}`, b.x + 12, b.y + b.h / 2);
+      ctx.textAlign = 'right';
+      ctx.font = font('display', 14);
+      const right = owned ? `${t('owned')} ${this.save.helmet?.charges ?? 0}` : locked ? `${t('locked')} ${helmet.level}` : `${helmet.price} ●`;
+      ctx.fillText(right, b.x + b.w - 12, b.y + b.h / 2);
+    });
+    ctx.textAlign = 'center';
+    const sb = this.shopButton;
+    ctx.fillStyle = THEME.accent;
+    roundRect(ctx, sb.x, sb.y, sb.w, sb.h, 14);
+    ctx.fill();
+    ctx.fillStyle = THEME.ui;
+    ctx.font = font('display', 18);
+    ctx.fillText(t('replay'), sb.x + sb.w / 2, sb.y + sb.h / 2);
   }
 }

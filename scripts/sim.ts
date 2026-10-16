@@ -4,12 +4,14 @@
  * It will grow with the economy (virtual free / small / big spenders over days of play).
  */
 import { BALANCE } from '../src/config/balance';
-import { Run } from '../src/game/run';
+import { defaultEquipment, Run } from '../src/game/run';
+
+const eq = (kickLevel: number) => ({ ...defaultEquipment(), kickLevel });
 
 const DT = 1 / BALANCE.loop.physicsHz;
 
 function play(kickLevel: number, power: number, angle: number): Run {
-  const run = new Run(1, kickLevel);
+  const run = new Run(1, eq(kickLevel));
   run.aim.power = power;
   run.aim.angle = angle;
   run.release();
