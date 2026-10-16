@@ -1,6 +1,7 @@
 import { BALANCE, launchSpeed } from '../config/balance';
 import { COUNTRIES, countryName, flagOf } from '../config/countries';
 import { GAME_URL } from '../config/links';
+import { Sounds } from '../core/audio';
 import type { PointerListener } from '../core/input';
 import { newSeed } from '../core/rng';
 import { aimFromDrag } from '../game/kick';
@@ -33,8 +34,15 @@ import {
   upgradeEffect,
   upgradeName,
 } from './i18n';
+import { haptic, type HapticKind, type Insets, type TelegramWebApp } from '../telegram/webapp';
+import { drawBanner, drawShockWave, Particles, Trail } from './fx';
 import { createOverlay, type Overlay } from './overlay';
 import { shareText } from './share';
+
+export interface AppOptions {
+  telegram: TelegramWebApp | null;
+  insets: Insets;
+}
 
 interface Button {
   x: number;
@@ -81,6 +89,23 @@ export class App implements PointerListener {
   private readonly ghost = new GhostTrajectory();
   private readonly equipment = defaultEquipment();
   private readonly overlay: Overlay | null;
+  private readonly sounds = new Sounds();
+  private readonly trail = new Trail();
+  private readonly particles = new Particles();
+  private readonly tg: TelegramWebApp | null;
+  private readonly insets: Insets;
+
+  // effects (seconds remaining, world positions)
+  private shockTime = 0;
+  private shockX = 0;
+  private shockY = 0;
+  private bannerTime = 0;
+  private bannerKind: 'distance' | 'altitude' = 'distance';
+  private slowMoTime = 0;
+  private slowMoCounter = 0;
+  private trailCounter = 0;
+  private distanceRecordHit = false;
+  private altitudeRecordHit = false;
 
   private screen: Screen = 'home';
   private shopTab: ShopTab = 'upgrades';
@@ -147,28 +172,43 @@ export class App implements PointerListener {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly store: KeyValueStore | null,
+    options: AppOptions = { telegram: null, insets: { top: 0, bottom: 0 } },
   ) {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Canvas 2D indisponible');
     this.ctx = ctx;
+    this.tg = options.telegram;
+    this.insets = options.insets;
     this.save = loadSave(store);
     this.save.level = levelFromXp(this.save.xp).level;
     setLang(this.save.settings.lang);
+    this.sounds.enabled = this.save.settings.sound;
     this.applyEquipment();
     this.run = new Run(newSeed(), this.equipment, 'depart', {
       onObstacle: (e) => {
         this.shake = Math.min(1, this.shake + 0.5);
         if (e.kind === 'radar') this.flash = 0.6;
+        this.sounds.play('obstacle');
+        this.buzz('impact');
       },
       onWall: (_e, broken) => {
         this.shake = 1;
         if (!broken) this.flash = 0.4;
+        this.sounds.play(broken ? 'wall' : 'crash');
+        this.buzz('wall');
       },
       onLawyer: () => {
         this.lawyerTime = 2.5;
+        this.sounds.play('buy');
       },
       onBounce: (impact) => {
         this.shake = Math.min(1, this.shake + impact / 60);
+        this.sounds.play('bounce', impact / 40);
+        this.buzz('bounce');
+      },
+      onCoin: (e) => {
+        this.particles.burst(e.x, e.y + 0.5, BALANCE.fx.particlesPerCoin, e.seed * 10);
+        this.sounds.play('coin');
       },
       onStage: (i) => {
         this.stageSignIndex = i;
@@ -182,10 +222,17 @@ export class App implements PointerListener {
       onSoundBarrier: () => {
         this.flash = 1;
         this.shake = 1;
+        this.shockTime = BALANCE.fx.shockSeconds;
+        this.shockX = this.run.body.x;
+        this.shockY = this.run.body.y;
+        this.sounds.play('barrier');
+        this.buzz('wall');
       },
       onRocket: () => {
         this.flash = 0.35;
         this.shake = 0.5;
+        this.sounds.play('rocket');
+        this.buzz('impact');
       },
     });
     const host = canvas.parentElement;
@@ -224,6 +271,10 @@ export class App implements PointerListener {
     writeSave(this.store, this.save);
   }
 
+  private buzz(kind: HapticKind): void {
+    if (this.save.settings.haptics) haptic(this.tg, kind);
+  }
+
   resize(): void {
     this.dpr = Math.min(window.devicePixelRatio || 1, BALANCE.render.maxDevicePixelRatio);
     this.width = this.canvas.clientWidth;
@@ -234,6 +285,8 @@ export class App implements PointerListener {
     const H = this.height;
     const bw = Math.min(W * 0.7, 320);
     const bx = (W - bw) / 2;
+    const T = this.insets.top;
+    const B = this.insets.bottom;
 
     // end screen
     Object.assign(this.replayButton, { x: bx, y: H * 0.7, w: bw, h: 64 });
@@ -243,8 +296,8 @@ export class App implements PointerListener {
     Object.assign(this.endHomeButton, { x: bx + 2 * (third + 6), y: H * 0.7 + 76, w: third, h: 44 });
 
     // flight
-    Object.assign(this.pauseButton, { x: 12, y: 12, w: 44, h: 44 });
-    Object.assign(this.speedButton, { x: W - 12 - 64, y: H - 24 - 44, w: 64, h: 44 });
+    Object.assign(this.pauseButton, { x: 12, y: 12 + T, w: 44, h: 44 });
+    Object.assign(this.speedButton, { x: W - 12 - 64, y: H - 24 - 44 - B, w: 64, h: 44 });
 
     // home
     Object.assign(this.playButton, { x: bx, y: H * 0.5, w: bw, h: 72 });
@@ -256,9 +309,9 @@ export class App implements PointerListener {
     // shop and list screens
     const panelW = Math.min(W - 24, 420);
     const panelX = (W - panelW) / 2;
-    const tabY = 66;
+    const tabY = 66 + T;
     this.tabButtons.forEach((b, i) => Object.assign(b, { x: panelX + 12 + i * (panelW / 2 - 12), y: tabY, w: panelW / 2 - 18, h: 40 }));
-    Object.assign(this.backButton, { x: bx, y: H - 72, w: bw, h: 48 });
+    Object.assign(this.backButton, { x: bx, y: H - 72 - B, w: bw, h: 48 });
     const top = tabY + 56;
     const rowH = Math.max(44, Math.min(58, (this.backButton.y - 16 - top) / this.rowButtons.length - 6));
     this.rowButtons.forEach((b, i) => Object.assign(b, { x: panelX + 12, y: top + i * (rowH + 6), w: panelW - 24, h: rowH }));
@@ -268,6 +321,8 @@ export class App implements PointerListener {
   // ---- input -------------------------------------------------------------
 
   down(x: number, y: number): void {
+    this.sounds.unlock();
+    if (this.screen !== 'game' || this.run.phase === 'ended') this.sounds.play('tap');
     if (SCROLL_SCREENS.includes(this.screen)) {
       this.pressed = true;
       this.dragging = false;
@@ -367,7 +422,7 @@ export class App implements PointerListener {
       return;
     }
     if (this.screen !== 'game' || !this.run.aiming) return;
-    this.run.release();
+    if (this.run.release()) this.sounds.play('kick');
   }
 
   private updateAim(): void {
@@ -399,7 +454,7 @@ export class App implements PointerListener {
   }
 
   private contentTop(): number {
-    return 62;
+    return 62 + this.insets.top;
   }
 
   private clampScroll(v: number): number {
@@ -420,6 +475,8 @@ export class App implements PointerListener {
     this.applyEquipment();
     this.syncAimedRun();
     awardTrophies(this.save);
+    this.sounds.play('buy');
+    this.buzz('buy');
     this.persist();
   }
 
@@ -431,6 +488,8 @@ export class App implements PointerListener {
     this.save.helmet = { id: helmet.id, charges: helmet.walls };
     this.applyEquipment();
     this.syncAimedRun();
+    this.sounds.play('buy');
+    this.buzz('buy');
     this.persist();
   }
 
@@ -447,6 +506,8 @@ export class App implements PointerListener {
     this.save.lastGift = this.now;
     this.giftFlash = 2;
     awardTrophies(this.save);
+    this.sounds.play('buy');
+    this.buzz('buy');
     this.persist();
   }
 
@@ -482,6 +543,13 @@ export class App implements PointerListener {
     this.stageSignTime = 0;
     this.layerSignTime = 0;
     this.flash = 0;
+    this.shockTime = 0;
+    this.bannerTime = 0;
+    this.slowMoTime = 0;
+    this.distanceRecordHit = false;
+    this.altitudeRecordHit = false;
+    this.trail.clear();
+    this.particles.clear();
     this.applyEquipment();
     this.run.reset(newSeed());
     this.camX = this.run.body.x;
@@ -503,9 +571,33 @@ export class App implements PointerListener {
     const run = this.run;
     const wasEnded = run.phase === 'ended';
     // Time accelerator: more physics steps per frame, the step itself never changes.
-    const stepsThisFrame = run.phase === 'flight' ? run.timeScale : 1;
+    // Slow motion on a record: only one update in 1/factor advances the physics.
+    let stepsThisFrame = run.phase === 'flight' ? run.timeScale : 1;
+    if (this.slowMoTime > 0) {
+      this.slowMoTime = Math.max(0, this.slowMoTime - dt);
+      this.slowMoCounter++;
+      stepsThisFrame = this.slowMoCounter % Math.round(1 / BALANCE.fx.slowMoFactor) === 0 ? 1 : 0;
+    }
     for (let i = 0; i < stepsThisFrame && run.phase !== 'ended'; i++) run.step(dt);
     if (!wasEnded && run.phase === 'ended') this.finishRun();
+    this.particles.update(dt);
+    if (this.shockTime > 0) this.shockTime = Math.max(0, this.shockTime - dt);
+    if (this.bannerTime > 0) this.bannerTime = Math.max(0, this.bannerTime - dt);
+    if (run.phase === 'flight') {
+      // One trail point every few physics steps, so the tail covers about a second of flight.
+      if (speedOf(run.body) > BALANCE.fx.trailMinSpeed) {
+        if (++this.trailCounter % BALANCE.fx.trailEverySteps === 0) this.trail.push(run.body.x, run.body.y);
+      } else this.trail.clear();
+      // Records fall in flight: short slow motion and a banner, distinct for distance and altitude.
+      if (!this.distanceRecordHit && this.save.bestDistance > 0 && run.distance > this.save.bestDistance) {
+        this.distanceRecordHit = true;
+        this.recordMoment('distance');
+      }
+      if (!this.altitudeRecordHit && this.save.bestAltitude > 0 && run.maxAltitude > this.save.bestAltitude) {
+        this.altitudeRecordHit = true;
+        this.recordMoment('altitude');
+      }
+    }
     if (this.stageSignTime > 0) this.stageSignTime = Math.max(0, this.stageSignTime - dt);
     if (this.layerSignTime > 0) this.layerSignTime = Math.max(0, this.layerSignTime - dt);
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 2);
@@ -528,10 +620,20 @@ export class App implements PointerListener {
     this.shake = Math.max(0, this.shake - dt * 2.5);
   }
 
+  private recordMoment(kind: 'distance' | 'altitude'): void {
+    this.bannerKind = kind;
+    this.bannerTime = BALANCE.fx.bannerSeconds;
+    this.slowMoTime = BALANCE.fx.slowMoSeconds;
+    this.slowMoCounter = 0;
+    this.sounds.play('record');
+    this.buzz('record');
+  }
+
   private finishRun(): void {
     const run = this.run;
     const save = this.save;
     save.runs++;
+    if (run.endReason === 'fatal') this.buzz('fatal');
     if (run.distance > save.bestDistance) {
       this.newRecord = save.bestDistance > 0;
       save.bestDistance = run.distance;
@@ -557,6 +659,7 @@ export class App implements PointerListener {
       save.helmet = run.helmetCharges > 0 ? { id: save.helmet.id, charges: run.helmetCharges } : null;
     }
     this.newTrophies = awardTrophies(save);
+    if (this.newTrophies.length > 0) this.sounds.play('trophy');
     this.applyEquipment();
     this.persist();
   }
@@ -584,8 +687,15 @@ export class App implements PointerListener {
     this.drawGround(originX, originY, scale);
     if (this.screen === 'game' && run.phase === 'aim' && run.aiming) this.drawGhost(originX, originY, scale);
     this.drawEntities(originX, originY, scale);
+    this.particles.draw(ctx, originX, originY, scale);
+    if (this.screen === 'game' && run.phase === 'flight') {
+      this.trail.draw(ctx, originX, originY, scale, Math.min(1, speedOf(b) / 150));
+    }
     this.drawPlayer(px, py, originX, originY, scale);
     this.drawBoot(originX, originY, scale);
+    if (this.shockTime > 0) {
+      drawShockWave(ctx, originX + this.shockX * scale, originY - this.shockY * scale, 1 - this.shockTime / BALANCE.fx.shockSeconds, W);
+    }
 
     if (this.screen === 'home') {
       this.drawHome();
@@ -605,6 +715,10 @@ export class App implements PointerListener {
     }
     this.drawSigns();
     this.drawHud();
+    if (this.bannerTime > 0) {
+      const text = this.bannerKind === 'distance' ? tg('endRecord', this.save.profile.gender) : t('endAltitudeRecord');
+      drawBanner(ctx, W, H * 0.3, 1 - this.bannerTime / BALANCE.fx.bannerSeconds, text, this.bannerKind, font('display', 24));
+    }
     if (run.phase === 'aim' && !run.aiming) this.drawHint();
     if (run.phase === 'ended') this.drawEndScreen();
     else if (this.paused) this.drawPause();
@@ -787,6 +901,8 @@ export class App implements PointerListener {
     ctx.textBaseline = 'top';
     ctx.lineJoin = 'round';
 
+    ctx.save();
+    ctx.translate(0, this.insets.top);
     ctx.font = font('display', 44);
     ctx.lineWidth = 6;
     ctx.strokeStyle = THEME.outline;
@@ -874,6 +990,7 @@ export class App implements PointerListener {
         ctx.fillText(label, W / 2, 106);
       }
     }
+    ctx.restore();
 
     if (run.phase === 'flight') {
       const p = this.pauseButton;
@@ -906,7 +1023,7 @@ export class App implements PointerListener {
     if (run.body.y > BALANCE.altitude.dragZeroAltitude) return;
     const wind = (STAGES[run.stageIndex] ?? STAGES[0]!).wind;
     const x = 22;
-    const y = this.height - 30;
+    const y = this.height - 30 - this.insets.bottom;
     ctx.fillStyle = THEME.ui;
     ctx.fillRect(x - 2, y - 40, 4, 40);
     const len = Math.min(44, 10 + Math.abs(wind) * 3);
@@ -1260,7 +1377,7 @@ export class App implements PointerListener {
     ctx.fillStyle = THEME.uiText;
     const panelW = Math.min(W - 24, 420);
     const panelX = (W - panelW) / 2;
-    ctx.fillText(this.listTitle(), panelX + 12, 18);
+    ctx.fillText(this.listTitle(), panelX + 12, 18 + this.insets.top);
     if (this.screen === 'trophies') {
       ctx.textAlign = 'right';
       ctx.font = font('display', 16);
@@ -1601,6 +1718,7 @@ export class App implements PointerListener {
     };
     toggle(t('sound'), s.sound ? t('on') : t('off'), () => {
       s.sound = !s.sound;
+      this.sounds.enabled = s.sound;
       this.persist();
     });
     toggle(t('haptics'), s.haptics ? t('on') : t('off'), () => {

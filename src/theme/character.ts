@@ -113,7 +113,7 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, look: Look, pose: n
   if (outfit.head === 'casquette') {
     ctx.fillStyle = legs;
     ctx.beginPath();
-    ctx.arc(headX, headY + 0.1, 0.62, 0, Math.PI, true);
+    ctx.arc(headX, headY + 0.1, 0.62, 0, Math.PI, false);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -123,7 +123,7 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, look: Look, pose: n
   if (outfit.head === 'casque_tissu') {
     ctx.fillStyle = '#ffc531';
     ctx.beginPath();
-    ctx.arc(headX, headY + 0.1, 0.68, 0, Math.PI, true);
+    ctx.arc(headX, headY + 0.1, 0.68, 0, Math.PI, false);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();

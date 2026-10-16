@@ -390,6 +390,23 @@ export const BALANCE = {
     { id: 'niveau_30', kind: 'level', value: 30, reward: 5000 },
   ],
 
+  /** Visual and timing effects. */
+  fx: {
+    trailPoints: 28,
+    trailEverySteps: 4,
+    trailMinSpeed: 25,
+    particlesPerCoin: 6,
+    particlePool: 128,
+    particleSeconds: 0.7,
+    shockSeconds: 0.7,
+    /** Slow motion when a record falls. */
+    slowMoSeconds: 0.2,
+    slowMoFactor: 0.25,
+    bannerSeconds: 2.2,
+    /** CloudStorage write debounce. */
+    cloudSaveDelayMs: 600,
+  },
+
   customisation: {
     /** Characters allowed in the player's name. */
     nameMaxLength: 16,
