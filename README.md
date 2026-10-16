@@ -23,7 +23,11 @@ npm run sim        # simulateur d'équilibrage (valeurs de balance.ts)
 - `src/telegram` : SDK Telegram (ready, expand, portrait, thème, haptique, CloudStorage, partage par requête inline).
 - `src/core/audio.ts` : sons courts synthétisés en WebAudio. `src/ui/fx.ts` : traînée, particules, onde de choc, bandeaux de record.
 - `public/sw.js` : service worker, le jeu reste jouable hors-ligne après le premier chargement.
-- `tests` : physique, pas fixe, monde, entités, progression, sauvegarde et migration.
+- `src/game/premium.ts` : billets (monnaie premium achetée en Stars), pass, packs, gadgets d'une course, paliers de l'accélérateur, plafond de dépense par jour. `src/game/retention.ts` : série de connexions, roue quotidienne gratuite, défis du jour, bonus anti-décrochage, « presque gagné ».
+- `src/telegram/payments.ts` : factures Stars via le serveur (`PAYMENTS_URL` dans `src/config/links.ts`, vide tant que le serveur n'est pas déployé : la boutique affiche alors les prix sans vendre). `src/core/analytics.ts` : événements anonymes, en file d'attente jusqu'à ce qu'un collecteur soit branché.
+- `tests` : physique, pas fixe, monde, entités, progression, sauvegarde et migration, économie premium et rétention.
+
+Règle d'économie : tout ce qui se paie est connu d'avance. L'aléatoire (roue, multiplicateurs) est toujours gratuit.
 
 ## Telegram
 

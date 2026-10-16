@@ -39,8 +39,8 @@ export function upgradeMaxed(id: UpgradeId, currentLevel: number): boolean {
 }
 
 /** Free gift availability: seconds until the next one, 0 when available. */
-export function giftCooldown(lastGift: number, now: number): number {
-  const period = BALANCE.economy.giftHours * 3600 * 1000;
+export function giftCooldown(lastGift: number, now: number, hours: number = BALANCE.economy.giftHours): number {
+  const period = hours * 3600 * 1000;
   return Math.max(0, lastGift + period - now) / 1000;
 }
 
