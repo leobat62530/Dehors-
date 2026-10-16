@@ -171,6 +171,7 @@ export class App implements PointerListener {
   private zoom = 1;
   private shake = 0;
   private readonly gradients = new Map<string, CanvasGradient>();
+  private sparkTimer = 0;
 
   // pointer
   private dragStartX = 0;
@@ -280,6 +281,7 @@ export class App implements PointerListener {
         this.shake = 1;
         if (!broken) this.flash = 0.4;
         this.sounds.play(broken ? 'wall' : 'crash');
+        if (broken) this.sounds.play('helmet');
         this.buzz('wall');
       },
       onLawyer: () => {
@@ -785,6 +787,17 @@ export class App implements PointerListener {
     );
     this.zoom += (targetZoom - this.zoom) * k * 0.5;
     this.shake = Math.max(0, this.shake - dt * 2.5);
+
+    // Skidding on the ground: a scraping loop and sparks under the face, both scaled by speed.
+    const sliding = run.phase === 'flight' && b.rolling && Math.abs(b.vx) > 2 && !this.paused;
+    this.sounds.skid(sliding ? Math.abs(b.vx) / 40 : 0);
+    if (sliding) {
+      this.sparkTimer -= dt;
+      if (this.sparkTimer <= 0) {
+        this.sparkTimer = BALANCE.fx.sparkEverySeconds;
+        this.particles.burst(b.x + 1.5, b.y + 0.2, BALANCE.fx.sparksPerBurst, run.time);
+      }
+    }
   }
 
   private recordMoment(kind: 'distance' | 'altitude'): void {
@@ -980,8 +993,8 @@ export class App implements PointerListener {
     const W = this.width;
     const H = this.height;
     const margin = 60;
-    // Small things stay readable when zoomed out, walls keep their true size.
-    const minScale = BALANCE.render.minCharacterPx / 2.4;
+    // Things in flight stay readable when zoomed out, never smaller than the character; walls keep their true size.
+    const minScale = BALANCE.render.minCharacterPx / BALANCE.player.height;
     for (const e of run.pool.items) {
       if (!e.active) continue;
       const sx = ox + e.x * scale;
@@ -1042,8 +1055,8 @@ export class App implements PointerListener {
     if (run.phase === 'flight') {
       const b = run.body;
       pose = b.rolling ? CHARACTER_POSE.roll : CHARACTER_POSE.flight;
-      const angle = b.rolling ? -run.time * b.vx * 0.6 : Math.atan2(b.vy, Math.max(1, b.vx)) * 0.8;
-      ctx.rotate(angle);
+      if (b.rolling) ctx.translate(0, Math.sin(run.time * 40) * 0.04 * Math.min(1, Math.abs(b.vx) / 20));
+      else ctx.rotate(Math.atan2(b.vy, Math.max(1, b.vx)) * 0.8);
     }
     drawCharacter(ctx, this.save.profile, pose, run.time);
     ctx.restore();
@@ -1205,6 +1218,42 @@ export class App implements PointerListener {
       ctx.fillText(`×${run.timeScale}`, sb.x + sb.w / 2, sb.y + sb.h / 2);
 
       this.drawWindsock();
+      this.drawStageProgress();
+    }
+  }
+
+  /** Bottom strip: how far along the current country the character is, and which one comes next. */
+  private drawStageProgress(): void {
+    const ctx = this.ctx;
+    const run = this.run;
+    const sb = this.speedButton;
+    const x0 = 84;
+    const x1 = sb.x - 14;
+    if (x1 - x0 < 80) return;
+    const stage = STAGES[run.stageIndex] ?? STAGES[0]!;
+    const next = STAGES[run.stageIndex + 1];
+    const span = next ? next.from - stage.from : 0;
+    const ratio = next && span > 0 ? Math.min(1, Math.max(0, (run.body.x - stage.from) / span)) : 1;
+    const y = sb.y + sb.h / 2 + 4;
+    ctx.fillStyle = 'rgba(27,29,42,0.55)';
+    roundRect(ctx, x0, y - 6, x1 - x0, 12, 6);
+    ctx.fill();
+    ctx.fillStyle = THEME.accent;
+    roundRect(ctx, x0, y - 6, Math.max(12, (x1 - x0) * ratio), 12, 6);
+    ctx.fill();
+    ctx.font = font('display', 12);
+    ctx.textBaseline = 'alphabetic';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = THEME.outline;
+    ctx.fillStyle = THEME.uiText;
+    ctx.textAlign = 'left';
+    ctx.strokeText(stageName(stage.id), x0, y - 12);
+    ctx.fillText(stageName(stage.id), x0, y - 12);
+    if (next) {
+      ctx.textAlign = 'right';
+      const label = `${stageName(next.id)} · ${formatDistance(Math.max(0, next.from - run.body.x))}`;
+      ctx.strokeText(label, x1, y - 12);
+      ctx.fillText(label, x1, y - 12);
     }
   }
 

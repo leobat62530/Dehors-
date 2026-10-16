@@ -92,11 +92,11 @@ describe('equipment in a run', () => {
 
   it('the suit reduces drag so the same kick goes further', () => {
     const base = new Run(1, defaultEquipment());
-    base.pool.clear();
+    base.emptyWorld();
     kickOff(base);
     playToEnd(base);
     const suit = new Run(1, { ...defaultEquipment(), suitLevel: 8 });
-    suit.pool.clear();
+    suit.emptyWorld();
     kickOff(suit);
     playToEnd(suit);
     expect(suit.distance).toBeGreaterThan(base.distance * 1.1);
@@ -104,7 +104,7 @@ describe('equipment in a run', () => {
 
   it('a tap fires the rocket when no clinger is on board, once per charge', () => {
     const run = new Run(1, { ...defaultEquipment(), rocketCharges: 1 });
-    run.pool.clear();
+    run.emptyWorld();
     kickOff(run);
     for (let i = 0; i < 0.5 / DT; i++) run.step(DT);
     const v = Math.hypot(run.body.vx, run.body.vy);
@@ -117,12 +117,12 @@ describe('equipment in a run', () => {
   it('the magnet picks up coins from further away', () => {
     // Find where the character passes x = 100, then hang a coin 3 m above its head.
     const probe = new Run(1, defaultEquipment());
-    probe.pool.clear();
+    probe.emptyWorld();
     kickOff(probe, 1, 20);
     while (probe.phase === 'flight' && probe.body.x < 100) probe.step(DT);
     const coinY = probe.body.y + BALANCE.player.height + 3;
     const place = (run: Run): void => {
-      run.pool.clear();
+      run.emptyWorld();
       const e = run.pool.alloc()!;
       e.type = 'coin';
       e.kind = 'coin';

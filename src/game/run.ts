@@ -193,7 +193,13 @@ export class Run {
     this.noProgressTime = 0;
     this.lastBounces = 0;
     this.spawner.reset();
-    this.spawner.advance(this.rng, this.body.x, 0);
+    this.spawner.prime(this.rng, this.body.x);
+  }
+
+  /** Empties the world and stops the generator: tests place exactly what they need. */
+  emptyWorld(): void {
+    this.pool.clear();
+    this.spawner.freeze();
   }
 
   /** Distance covered since the kick, without the ramp. */
@@ -271,7 +277,7 @@ export class Run {
         stepBody(this.body, dt, this.events.onBounce, this.env);
         this.collide(dt);
         this.track(dt);
-        this.spawner.advance(this.rng, this.body.x, this.body.y);
+        this.spawner.advance(this.rng, this.body.x, this.body.y, this.body.vx, this.body.vy);
         this.pool.cull(this.body.x - 200);
         return;
     }

@@ -197,15 +197,15 @@ export const BALANCE = {
 
   /** Bouncers: vertical gain (m/s) and whether they pop after one use. */
   bouncers: {
-    pigeon: { gain: 18, once: false, w: 1.6, h: 1.2 },
-    ballon: { gain: 22, once: true, w: 2.2, h: 2.6 },
-    mouette: { gain: 26, once: false, w: 2.4, h: 1.2 },
-    drone: { gain: 30, once: true, w: 2.4, h: 1.2 },
+    pigeon: { gain: 18, once: false, w: 2.6, h: 2.0 },
+    ballon: { gain: 22, once: true, w: 2.8, h: 3.4 },
+    mouette: { gain: 26, once: false, w: 3.4, h: 1.8 },
+    drone: { gain: 30, once: true, w: 3.2, h: 1.8 },
     montgolfiere: { gain: 40, once: false, w: 6, h: 8 },
     trampoline: { gain: 45, once: false, w: 5, h: 1 },
     chameau: { gain: 36, once: false, w: 4, h: 3 },
     thermique: { gain: 28, once: false, w: 6, h: 10 },
-    poisson: { gain: 24, once: false, w: 2, h: 1 },
+    poisson: { gain: 24, once: false, w: 2.8, h: 1.6 },
     satellite: { gain: 60, once: false, w: 6, h: 4 },
   },
 
@@ -247,10 +247,18 @@ export const BALANCE = {
     chunk: 100,
     /** Spawn ahead of the character by this much (m). */
     lookahead: 900,
-    /** Vertical band for aerial spawns: fraction of the current altitude plus this base (m). */
-    airBandBase: 12,
-    airBandFactor: 0.9,
-    airBandMax: 11_000,
+    /** Before the kick only this much is generated (m): the rest follows the real trajectory. */
+    lookaheadStart: 120,
+    /**
+     * Aerial spawns sit around the character's predicted path (ballistic, from the current
+     * velocity): half-height of the band (m) is this base plus a share of the predicted altitude.
+     */
+    airSpreadBase: 25,
+    airSpreadFactor: 0.12,
+    /** Global multipliers on the per-stage densities below. */
+    densityScale: { bouncers: 1.3, boosters: 1.7, obstacles: 1 },
+    /** Sizes (m) of boosters, obstacles and coins: never smaller than the character. `scale` multiplies every aerial thing. */
+    sizes: { booster: { w: 2.6, h: 2.6 }, obstacle: { w: 2.8, h: 3 }, coin: 1.3, scale: 1 },
     stages: {
       arras: { bouncers: 1.4, boosters: 0.5, obstacles: 0.12, kinds: { pigeon: 6, ballon: 2 }, wallEvery: 230, wallHeight: 22 },
       somme: { bouncers: 1.1, boosters: 0.5, obstacles: 0.18, kinds: { ballon: 5, pigeon: 2, montgolfiere: 1 }, wallEvery: 380, wallHeight: 28 },
@@ -400,6 +408,9 @@ export const BALANCE = {
 
   /** Visual and timing effects. */
   fx: {
+    /** Sparks while skidding on the ground: one burst every so often (s), this many each. */
+    sparkEverySeconds: 0.06,
+    sparksPerBurst: 2,
     trailPoints: 28,
     trailEverySteps: 4,
     trailMinSpeed: 25,
