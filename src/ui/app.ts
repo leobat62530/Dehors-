@@ -1,20 +1,40 @@
 import { BALANCE, launchSpeed } from '../config/balance';
+import { COUNTRIES, countryName, flagOf } from '../config/countries';
+import { GAME_URL } from '../config/links';
 import type { PointerListener } from '../core/input';
 import { newSeed } from '../core/rng';
 import { aimFromDrag } from '../game/kick';
 import { speedOf } from '../game/physics';
 import { giftAmount, giftCooldown, levelFromXp, UPGRADE_IDS, upgradeMaxed, upgradePrice, xpForRun } from '../game/progress';
 import { defaultEquipment, Run } from '../game/run';
-import { type KeyValueStore, loadSave, type SaveData, writeSave } from '../game/save';
+import { cleanName, defaultSave, type KeyValueStore, loadSave, type SaveData, writeSave } from '../game/save';
 import { GhostTrajectory } from '../game/trajectory';
+import { awardTrophies, TROPHIES, type TrophyDef, trophyProgress } from '../game/trophies';
 import { LAYERS, STAGES, stageAt } from '../game/world';
-import { ASSETS, POSE, roundRect } from '../theme/assets';
-import { LAYER_PALETTES, STAGE_PALETTES } from '../theme/palettes';
+import { ASSETS, roundRect } from '../theme/assets';
+import { CHARACTER_POSE, drawCharacter } from '../theme/character';
 import { drawEntity } from '../theme/entitySprites';
+import { LAYER_PALETTES, STAGE_PALETTES } from '../theme/palettes';
 import { drawBorderSign, drawLayerSign, drawScenery, drawStars } from '../theme/scenery';
 import { font, THEME } from '../theme/theme';
+import { FABRIC_COLOURS, GENDERS, HAIRSTYLES, OUTFIT_IDS, OUTFITS } from '../theme/wardrobe';
 import { formatAltitude, formatDistance, formatSpeedKmh } from './format';
-import { fatalText, helmetName, layerName, stageName, t, upgradeEffect, upgradeName } from './i18n';
+import {
+  fatalText,
+  helmetName,
+  layerName,
+  setLang,
+  stageName,
+  t,
+  type TextKey,
+  tg,
+  trophyKindText,
+  trophyName,
+  upgradeEffect,
+  upgradeName,
+} from './i18n';
+import { createOverlay, type Overlay } from './overlay';
+import { shareText } from './share';
 
 interface Button {
   x: number;
@@ -37,20 +57,30 @@ function formatCooldown(seconds: number): string {
   return h > 0 ? `${h} h ${String(m).padStart(2, '0')}` : `${m} min`;
 }
 
-type Screen = 'home' | 'game' | 'shop';
+type Screen = 'home' | 'game' | 'shop' | 'customize' | 'trophies' | 'profiles' | 'settings';
 type ShopTab = 'upgrades' | 'helmets';
 
-/** Game screen: home, aim, kick, flight, end screen and shop. Owns the canvas and the current run. */
+/** One element of a scrolling list screen: its box in content coordinates, how to draw it, what a tap does. */
+interface Item {
+  b: Button;
+  draw: (b: Button) => void;
+  tap?: () => void;
+}
+
+const SCROLL_SCREENS: readonly Screen[] = ['customize', 'trophies', 'profiles', 'settings'];
+
+/** Game screen: home, aim, kick, flight, end screen, shop and the menus. Owns the canvas and the current run. */
 export class App implements PointerListener {
   private readonly ctx: CanvasRenderingContext2D;
   private width = 0;
   private height = 0;
   private dpr = 1;
 
-  private readonly save: SaveData;
+  private save: SaveData;
   private readonly run: Run;
   private readonly ghost = new GhostTrajectory();
   private readonly equipment = defaultEquipment();
+  private readonly overlay: Overlay | null;
 
   private screen: Screen = 'home';
   private shopTab: ShopTab = 'upgrades';
@@ -70,14 +100,28 @@ export class App implements PointerListener {
   private dragX = 0;
   private dragY = 0;
 
+  // scrolling list screens
+  private items: Item[] = [];
+  private contentHeight = 0;
+  private scrollY = 0;
+  private pressY = 0;
+  private pressScroll = 0;
+  private pressed = false;
+  private dragging = false;
+  private relayout = true;
+  private resetStep = 0;
+
   private paused = false;
   private newRecord = false;
   private newAltitudeRecord = false;
   private levelsGained = 0;
   private runXp = 0;
+  private newTrophies: TrophyDef[] = [];
+  private sharedTime = 0;
 
   // buttons
   private readonly replayButton = btn();
+  private readonly shareButton = btn();
   private readonly endShopButton = btn();
   private readonly endHomeButton = btn();
   private readonly pauseButton = btn();
@@ -85,7 +129,7 @@ export class App implements PointerListener {
   private readonly playButton = btn();
   private readonly homeShopButton = btn();
   private readonly giftButton = btn();
-  private readonly soonButtons: Button[] = [btn(), btn(), btn(), btn()];
+  private readonly menuButtons: Button[] = [btn(), btn(), btn(), btn()];
   private readonly tabButtons: Button[] = [btn(), btn()];
   private readonly rowButtons: Button[] = UPGRADE_IDS.map(() => btn());
   private readonly backButton = btn();
@@ -109,6 +153,7 @@ export class App implements PointerListener {
     this.ctx = ctx;
     this.save = loadSave(store);
     this.save.level = levelFromXp(this.save.xp).level;
+    setLang(this.save.settings.lang);
     this.applyEquipment();
     this.run = new Run(newSeed(), this.equipment, 'depart', {
       onObstacle: (e) => {
@@ -143,6 +188,21 @@ export class App implements PointerListener {
         this.shake = 0.5;
       },
     });
+    const host = canvas.parentElement;
+    this.overlay = host ? createOverlay(host, BALANCE.customisation.nameMaxLength, COUNTRIES, t('nationalityNone')) : null;
+    if (this.overlay) {
+      this.overlay.input.addEventListener('input', () => {
+        this.save.profile.name = cleanName(this.overlay!.input.value);
+        this.persist();
+      });
+      this.overlay.input.addEventListener('change', () => {
+        this.overlay!.input.value = this.save.profile.name;
+      });
+      this.overlay.select.addEventListener('change', () => {
+        this.save.profile.nationality = this.overlay!.select.value;
+        this.persist();
+      });
+    }
     this.resize();
   }
 
@@ -160,6 +220,10 @@ export class App implements PointerListener {
     eq.helmetCharges = this.save.helmet?.charges ?? 0;
   }
 
+  private persist(): void {
+    writeSave(this.store, this.save);
+  }
+
   resize(): void {
     this.dpr = Math.min(window.devicePixelRatio || 1, BALANCE.render.maxDevicePixelRatio);
     this.width = this.canvas.clientWidth;
@@ -173,8 +237,10 @@ export class App implements PointerListener {
 
     // end screen
     Object.assign(this.replayButton, { x: bx, y: H * 0.7, w: bw, h: 64 });
-    Object.assign(this.endShopButton, { x: bx, y: H * 0.7 + 76, w: bw / 2 - 6, h: 44 });
-    Object.assign(this.endHomeButton, { x: bx + bw / 2 + 6, y: H * 0.7 + 76, w: bw / 2 - 6, h: 44 });
+    const third = (bw - 12) / 3;
+    Object.assign(this.shareButton, { x: bx, y: H * 0.7 + 76, w: third, h: 44 });
+    Object.assign(this.endShopButton, { x: bx + third + 6, y: H * 0.7 + 76, w: third, h: 44 });
+    Object.assign(this.endHomeButton, { x: bx + 2 * (third + 6), y: H * 0.7 + 76, w: third, h: 44 });
 
     // flight
     Object.assign(this.pauseButton, { x: 12, y: 12, w: 44, h: 44 });
@@ -185,9 +251,9 @@ export class App implements PointerListener {
     Object.assign(this.homeShopButton, { x: bx, y: H * 0.5 + 86, w: bw / 2 - 6, h: 48 });
     Object.assign(this.giftButton, { x: bx + bw / 2 + 6, y: H * 0.5 + 86, w: bw / 2 - 6, h: 48 });
     const sw = (bw - 18) / 4;
-    this.soonButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (sw + 6), y: H * 0.5 + 148, w: sw, h: 56 }));
+    this.menuButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (sw + 6), y: H * 0.5 + 148, w: sw, h: 56 }));
 
-    // shop
+    // shop and list screens
     const panelW = Math.min(W - 24, 420);
     const panelX = (W - panelW) / 2;
     const tabY = 66;
@@ -196,15 +262,29 @@ export class App implements PointerListener {
     const top = tabY + 56;
     const rowH = Math.max(44, Math.min(58, (this.backButton.y - 16 - top) / this.rowButtons.length - 6));
     this.rowButtons.forEach((b, i) => Object.assign(b, { x: panelX + 12, y: top + i * (rowH + 6), w: panelW - 24, h: rowH }));
+    this.relayout = true;
   }
 
   // ---- input -------------------------------------------------------------
 
   down(x: number, y: number): void {
+    if (SCROLL_SCREENS.includes(this.screen)) {
+      this.pressed = true;
+      this.dragging = false;
+      this.pressY = y;
+      this.pressScroll = this.scrollY;
+      return;
+    }
     if (this.screen === 'home') {
       if (inside(this.playButton, x, y)) this.screen = 'game';
       else if (inside(this.homeShopButton, x, y)) this.openShop('home');
       else if (inside(this.giftButton, x, y)) this.claimGift();
+      else {
+        const targets: Screen[] = ['customize', 'trophies', 'profiles', 'settings'];
+        this.menuButtons.forEach((b, i) => {
+          if (inside(b, x, y)) this.openList(targets[i]!);
+        });
+      }
       return;
     }
     if (this.screen === 'shop') {
@@ -222,6 +302,7 @@ export class App implements PointerListener {
     const run = this.run;
     if (run.phase === 'ended') {
       if (inside(this.replayButton, x, y)) this.restart();
+      else if (inside(this.shareButton, x, y)) void this.share();
       else if (inside(this.endShopButton, x, y)) this.openShop('game');
       else if (inside(this.endHomeButton, x, y)) {
         this.restart();
@@ -254,13 +335,37 @@ export class App implements PointerListener {
   }
 
   move(x: number, y: number): void {
+    if (this.pressed) {
+      const dy = y - this.pressY;
+      if (Math.abs(dy) > 8) this.dragging = true;
+      if (this.dragging) this.scrollY = this.clampScroll(this.pressScroll - dy);
+      return;
+    }
     if (this.screen !== 'game' || !this.run.aiming) return;
     this.dragX = x;
     this.dragY = y;
     this.updateAim();
   }
 
-  up(): void {
+  up(x: number, y: number): void {
+    if (this.pressed) {
+      this.pressed = false;
+      if (this.dragging) return;
+      if (inside(this.backButton, x, y)) {
+        this.closeList();
+        return;
+      }
+      const cy = y - this.contentTop() + this.scrollY;
+      if (y < this.contentTop() || y > this.backButton.y - 8) return;
+      for (const item of this.items) {
+        if (item.tap && inside(item.b, x, cy)) {
+          item.tap();
+          this.relayout = true;
+          break;
+        }
+      }
+      return;
+    }
     if (this.screen !== 'game' || !this.run.aiming) return;
     this.run.release();
   }
@@ -276,6 +381,32 @@ export class App implements PointerListener {
     this.screen = 'shop';
   }
 
+  private openList(screen: Screen): void {
+    this.screen = screen;
+    this.scrollY = 0;
+    this.resetStep = 0;
+    this.relayout = true;
+    if (this.overlay) {
+      this.overlay.input.value = this.save.profile.name;
+      this.overlay.select.value = this.save.profile.nationality;
+    }
+  }
+
+  private closeList(): void {
+    this.overlay?.place(false, this.backButton, this.backButton);
+    this.screen = 'home';
+    this.resetStep = 0;
+  }
+
+  private contentTop(): number {
+    return 62;
+  }
+
+  private clampScroll(v: number): number {
+    const viewport = this.backButton.y - 12 - this.contentTop();
+    return Math.max(0, Math.min(Math.max(0, this.contentHeight - viewport), v));
+  }
+
   private buyUpgrade(index: number): void {
     const id = UPGRADE_IDS[index];
     if (!id) return;
@@ -288,7 +419,8 @@ export class App implements PointerListener {
     this.save.upgrades[id] = level + 1;
     this.applyEquipment();
     this.syncAimedRun();
-    writeSave(this.store, this.save);
+    awardTrophies(this.save);
+    this.persist();
   }
 
   private buyHelmet(index: number): void {
@@ -299,7 +431,7 @@ export class App implements PointerListener {
     this.save.helmet = { id: helmet.id, charges: helmet.walls };
     this.applyEquipment();
     this.syncAimedRun();
-    writeSave(this.store, this.save);
+    this.persist();
   }
 
   /** A run waiting for its kick picks up new equipment at once (ramp, charges). */
@@ -314,7 +446,28 @@ export class App implements PointerListener {
     this.save.totalCoins += amount;
     this.save.lastGift = this.now;
     this.giftFlash = 2;
-    writeSave(this.store, this.save);
+    awardTrophies(this.save);
+    this.persist();
+  }
+
+  private async share(): Promise<void> {
+    const run = this.run;
+    const line = t('shareLine')
+      .replace('{name}', this.save.profile.name)
+      .replace('{distance}', formatDistance(run.distance))
+      .replace('{altitude}', formatAltitude(run.maxAltitude));
+    if (await shareText(`${line} ${GAME_URL}`)) this.sharedTime = 2;
+  }
+
+  private resetProgress(keepProfile: boolean): void {
+    const fresh = defaultSave();
+    if (keepProfile) fresh.profile = this.save.profile;
+    fresh.settings = this.save.settings;
+    this.save = fresh;
+    this.applyEquipment();
+    this.persist();
+    this.run.reset(newSeed());
+    this.resetStep = 0;
   }
 
   private restart(): void {
@@ -322,6 +475,8 @@ export class App implements PointerListener {
     this.newAltitudeRecord = false;
     this.levelsGained = 0;
     this.runXp = 0;
+    this.newTrophies = [];
+    this.sharedTime = 0;
     this.paused = false;
     this.lawyerTime = 0;
     this.stageSignTime = 0;
@@ -339,8 +494,9 @@ export class App implements PointerListener {
   update(dt: number): void {
     this.now = Date.now();
     if (this.giftFlash > 0) this.giftFlash = Math.max(0, this.giftFlash - dt);
+    if (this.sharedTime > 0) this.sharedTime = Math.max(0, this.sharedTime - dt);
     if (this.paused || this.screen !== 'game') {
-      // Home and shop keep the scenery alive behind them, without advancing the run.
+      // Home and menus keep the scenery alive behind them, without advancing the run.
       this.run.time += dt;
       return;
     }
@@ -392,12 +548,17 @@ export class App implements PointerListener {
     save.xp += this.runXp;
     save.level = levelFromXp(save.xp).level;
     this.levelsGained = save.level - before;
+    save.stats.wallsBroken += run.wallsBroken;
+    save.stats.controlsAvoided += run.lawyerUsed;
+    save.stats.barriers += run.barrierCount;
+    save.stats.bestChain = Math.max(save.stats.bestChain, run.bestBouncerChain);
     // The helmet keeps the charges it has left; consumed when none remain.
     if (save.helmet) {
       save.helmet = run.helmetCharges > 0 ? { id: save.helmet.id, charges: run.helmetCharges } : null;
     }
+    this.newTrophies = awardTrophies(save);
     this.applyEquipment();
-    writeSave(this.store, save);
+    this.persist();
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -423,7 +584,7 @@ export class App implements PointerListener {
     this.drawGround(originX, originY, scale);
     if (this.screen === 'game' && run.phase === 'aim' && run.aiming) this.drawGhost(originX, originY, scale);
     this.drawEntities(originX, originY, scale);
-    this.drawCharacter(px, py, originX, originY, scale);
+    this.drawPlayer(px, py, originX, originY, scale);
     this.drawBoot(originX, originY, scale);
 
     if (this.screen === 'home') {
@@ -432,6 +593,10 @@ export class App implements PointerListener {
     }
     if (this.screen === 'shop') {
       this.drawShop();
+      return;
+    }
+    if (SCROLL_SCREENS.includes(this.screen)) {
+      this.drawList();
       return;
     }
     if (this.flash > 0) {
@@ -558,7 +723,7 @@ export class App implements PointerListener {
     }
   }
 
-  private drawCharacter(x: number, y: number, ox: number, oy: number, scale: number): void {
+  private drawPlayer(x: number, y: number, ox: number, oy: number, scale: number): void {
     const ctx = this.ctx;
     const run = this.run;
     const P = BALANCE.player;
@@ -567,14 +732,14 @@ export class App implements PointerListener {
     ctx.save();
     ctx.translate(ox + x * scale, oy - y * scale - (P.height / 2 + 0.5) * spriteScale);
     ctx.scale(spriteScale, -spriteScale);
-    let pose = POSE.fours;
+    let pose: number = CHARACTER_POSE.fours;
     if (run.phase === 'flight') {
       const b = run.body;
-      pose = b.rolling ? POSE.roll : POSE.flight;
+      pose = b.rolling ? CHARACTER_POSE.roll : CHARACTER_POSE.flight;
       const angle = b.rolling ? -run.time * b.vx * 0.6 : Math.atan2(b.vy, Math.max(1, b.vx)) * 0.8;
       ctx.rotate(angle);
     }
-    ASSETS.character.draw(ctx, pose);
+    drawCharacter(ctx, this.save.profile, pose);
     ctx.restore();
   }
 
@@ -609,6 +774,11 @@ export class App implements PointerListener {
     ctx.restore();
   }
 
+  private playerLabel(): string {
+    const flag = flagOf(this.save.profile.nationality);
+    return `${flag ? `${flag} ` : ''}${this.save.profile.name}`;
+  }
+
   private drawHud(): void {
     const ctx = this.ctx;
     const run = this.run;
@@ -632,7 +802,7 @@ export class App implements PointerListener {
     ctx.fillText(sub, W / 2, 68);
     ctx.font = font('text', 12);
     ctx.fillStyle = THEME.uiTextSoft;
-    const name = `${t('defaultName')} · ${t('level')} ${this.save.level}`;
+    const name = `${this.playerLabel()} · ${t('level')} ${this.save.level}`;
     ctx.strokeText(name, W / 2, 88);
     ctx.fillText(name, W / 2, 88);
 
@@ -805,7 +975,20 @@ export class App implements PointerListener {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = font('display', size);
-    ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2);
+    ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2, b.w - 12);
+  }
+
+  /** Small selectable pill. */
+  private chip(b: Button, label: string, selected: boolean, size = 13): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = selected ? THEME.accent : 'rgba(255,255,255,0.1)';
+    roundRect(ctx, b.x, b.y, b.w, b.h, b.h / 2);
+    ctx.fill();
+    ctx.fillStyle = selected ? THEME.ui : THEME.uiText;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = font('display', size);
+    ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2, b.w - 8);
   }
 
   /** Level and progress bar, `w` wide, top-left at (x, y). */
@@ -830,6 +1013,15 @@ export class App implements PointerListener {
     ctx.fill();
   }
 
+  private sectionLabel(b: Button, text: string): void {
+    const ctx = this.ctx;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = font('display', 14);
+    ctx.fillStyle = THEME.uiTextSoft;
+    ctx.fillText(text, b.x, b.y + b.h / 2);
+  }
+
   // ---- screens -------------------------------------------------------------
 
   private drawHome(): void {
@@ -846,22 +1038,26 @@ export class App implements PointerListener {
     ctx.lineWidth = 8;
     ctx.strokeStyle = THEME.outline;
     ctx.fillStyle = THEME.accent;
-    ctx.strokeText(t('title'), W / 2, H * 0.09);
-    ctx.fillText(t('title'), W / 2, H * 0.09);
+    ctx.strokeText(t('title'), W / 2, H * 0.08);
+    ctx.fillText(t('title'), W / 2, H * 0.08);
 
     const panelW = Math.min(W - 32, 380);
     const panelX = (W - panelW) / 2;
-    const panelY = H * 0.24;
+    const panelY = H * 0.22;
     ctx.fillStyle = THEME.ui;
-    roundRect(ctx, panelX, panelY, panelW, 160, 20);
+    roundRect(ctx, panelX, panelY, panelW, 186, 20);
     ctx.fill();
+    ctx.font = font('display', 16);
+    ctx.fillStyle = THEME.uiText;
+    ctx.textAlign = 'left';
+    ctx.fillText(this.playerLabel(), panelX + 20, panelY + 16);
     ctx.font = font('text', 15);
     const rows: [string, string][] = [
       [t('bestDistance'), this.save.bestDistance > 0 ? formatDistance(this.save.bestDistance) : '—'],
       [t('bestAltitude'), this.save.bestAltitude > 0 ? formatAltitude(this.save.bestAltitude) : '—'],
       [t('coinsTotal'), `${this.save.coins} ●`],
     ];
-    let y = panelY + 18;
+    let y = panelY + 44;
     for (const [label, value] of rows) {
       ctx.textAlign = 'left';
       ctx.fillStyle = THEME.uiTextSoft;
@@ -890,13 +1086,8 @@ export class App implements PointerListener {
       ctx.fillText(`+${giftAmount(this.save.level)} ●`, this.giftButton.x + this.giftButton.w / 2, this.giftButton.y - 22);
       ctx.globalAlpha = 1;
     }
-    const soon: string[] = [t('customize'), t('trophies'), t('profiles'), t('settings')];
-    this.soonButtons.forEach((b, i) => {
-      this.button(b, soon[i] ?? '', 'disabled', 11);
-      ctx.font = font('text', 10);
-      ctx.fillStyle = THEME.uiTextSoft;
-      ctx.fillText(t('soon'), b.x + b.w / 2, b.y + b.h - 12);
-    });
+    const labels: string[] = [t('customize'), t('trophies'), t('profiles'), t('settings')];
+    this.menuButtons.forEach((b, i) => this.button(b, labels[i] ?? '', 'secondary', 11));
   }
 
   private drawEndScreen(): void {
@@ -909,26 +1100,34 @@ export class App implements PointerListener {
 
     const panelW = Math.min(W - 32, 380);
     const panelX = (W - panelW) / 2;
-    const panelY = H * 0.14;
+    const panelY = H * 0.13;
     ctx.fillStyle = THEME.ui;
-    roundRect(ctx, panelX, panelY, panelW, 372, 20);
+    roundRect(ctx, panelX, panelY, panelW, 396, 20);
     ctx.fill();
 
+    const gender = this.save.profile.gender;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.font = font('text', 16);
     const cause =
-      run.endReason === 'fatal' && run.fatalKind ? fatalText(run.fatalKind) : run.endReason === 'wall' ? t('endWall') : t('endTitle');
+      run.endReason === 'fatal' && run.fatalKind ? fatalText(run.fatalKind, gender) : run.endReason === 'wall' ? t('endWall') : t('endTitle');
     ctx.fillStyle = run.endReason === 'fatal' || run.endReason === 'wall' ? THEME.danger : THEME.uiTextSoft;
-    ctx.fillText(cause, W / 2, panelY + 18);
+    ctx.fillText(cause, W / 2, panelY + 18, panelW - 24);
     ctx.fillStyle = THEME.accent;
     ctx.font = font('display', 50);
     ctx.fillText(formatDistance(run.distance), W / 2, panelY + 42);
-    if (this.newRecord || this.newAltitudeRecord || this.levelsGained > 0) {
+    const trophy = this.newTrophies[0];
+    if (this.newRecord || this.newAltitudeRecord || this.levelsGained > 0 || trophy) {
       ctx.fillStyle = THEME.uiText;
-      ctx.font = font('display', 17);
-      const line = this.levelsGained > 0 ? `${t('levelUp')} ${t('level')} ${this.save.level}` : this.newRecord ? t('endRecord') : t('endAltitudeRecord');
-      ctx.fillText(line, W / 2, panelY + 102);
+      ctx.font = font('display', 16);
+      const line = trophy
+        ? `${t('trophyUnlocked')} ${trophyName(trophy.id)} +${trophy.reward} ●${this.newTrophies.length > 1 ? ` (+${this.newTrophies.length - 1})` : ''}`
+        : this.levelsGained > 0
+          ? `${t('levelUp')} ${t('level')} ${this.save.level}`
+          : this.newRecord
+            ? tg('endRecord', gender)
+            : t('endAltitudeRecord');
+      ctx.fillText(line, W / 2, panelY + 102, panelW - 24);
     }
 
     ctx.font = font('text', 15);
@@ -954,10 +1153,16 @@ export class App implements PointerListener {
       y += 25;
     }
     this.drawXpBar(panelX + 22, y + 8, panelW - 44);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = font('text', 12);
+    ctx.fillStyle = THEME.uiTextSoft;
+    ctx.fillText(this.playerLabel(), W / 2, y + 48);
 
     this.button(this.replayButton, t('replay'), 'primary', 28);
-    this.button(this.endShopButton, t('shop'), 'secondary', 16);
-    this.button(this.endHomeButton, t('home'), 'secondary', 16);
+    this.button(this.shareButton, this.sharedTime > 0 ? t('shared') : t('share'), 'secondary', 13);
+    this.button(this.endShopButton, t('shop'), 'secondary', 13);
+    this.button(this.endHomeButton, t('home'), 'secondary', 13);
     ctx.fillStyle = THEME.uiTextSoft;
     ctx.font = font('text', 11);
     ctx.textAlign = 'center';
@@ -1028,5 +1233,455 @@ export class App implements PointerListener {
     ctx.font = font('display', 14);
     ctx.fillStyle = done ? THEME.accent : locked ? THEME.uiTextSoft : affordable ? THEME.uiText : THEME.danger;
     ctx.fillText(right, b.x + b.w - 12, b.y + b.h / 2);
+  }
+
+  // ---- scrolling list screens ------------------------------------------------
+
+  private listTitle(): string {
+    const key: TextKey = this.screen === 'customize' ? 'customize' : this.screen === 'trophies' ? 'trophies' : this.screen === 'profiles' ? 'profiles' : 'settings';
+    return t(key);
+  }
+
+  private drawList(): void {
+    const ctx = this.ctx;
+    const W = this.width;
+    const H = this.height;
+    if (this.relayout) {
+      this.items = this.layoutList();
+      this.contentHeight = this.items.reduce((m, it) => Math.max(m, it.b.y + it.b.h), 0) + 16;
+      this.scrollY = this.clampScroll(this.scrollY);
+      this.relayout = false;
+    }
+    ctx.fillStyle = THEME.ui;
+    ctx.fillRect(0, 0, W, H);
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.font = font('display', 26);
+    ctx.fillStyle = THEME.uiText;
+    const panelW = Math.min(W - 24, 420);
+    const panelX = (W - panelW) / 2;
+    ctx.fillText(this.listTitle(), panelX + 12, 18);
+    if (this.screen === 'trophies') {
+      ctx.textAlign = 'right';
+      ctx.font = font('display', 16);
+      ctx.fillStyle = THEME.accent;
+      ctx.fillText(`${this.save.trophies.length}/${TROPHIES.length} ${t('trophiesCount')}`, panelX + panelW - 12, 26);
+    }
+
+    const top = this.contentTop();
+    const bottom = this.backButton.y - 12;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, top, W, bottom - top);
+    ctx.clip();
+    ctx.translate(0, top - this.scrollY);
+    for (const item of this.items) {
+      const sy = item.b.y - this.scrollY + top;
+      if (sy + item.b.h < top - 4 || sy > bottom + 4) continue;
+      item.draw(item.b);
+    }
+    ctx.restore();
+    this.button(this.backButton, t('back'), 'secondary', 18);
+
+    // Native controls follow their rows; hidden off the other screens and outside the viewport.
+    if (this.overlay) {
+      const show = this.screen === 'customize';
+      const row = (b: Button): Button => ({ x: b.x, y: b.y + top - this.scrollY, w: b.w, h: b.h });
+      const input = row(this.nameBox);
+      const select = row(this.countryBox);
+      const visible = (r: Button): boolean => r.y >= top - 2 && r.y + r.h <= bottom + 2;
+      this.overlay.place(show, input, select);
+      if (show) {
+        this.overlay.input.style.display = visible(input) ? 'block' : 'none';
+        this.overlay.select.style.display = visible(select) ? 'block' : 'none';
+      }
+    }
+  }
+
+  private nameBox: Button = btn();
+  private countryBox: Button = btn();
+
+  private layoutList(): Item[] {
+    switch (this.screen) {
+      case 'customize':
+        return this.layoutCustomize();
+      case 'trophies':
+        return this.layoutTrophies();
+      case 'profiles':
+        return this.layoutProfiles();
+      case 'settings':
+        return this.layoutSettings();
+      default:
+        return [];
+    }
+  }
+
+  private layoutCustomize(): Item[] {
+    const W = this.width;
+    const panelW = Math.min(W - 24, 420);
+    const x0 = (W - panelW) / 2 + 12;
+    const cw = panelW - 24;
+    const items: Item[] = [];
+    const p = this.save.profile;
+    let y = 0;
+
+    // Live preview: on all fours, boot ready.
+    items.push({
+      b: { x: x0, y, w: cw, h: 170 },
+      draw: (b) => {
+        const ctx = this.ctx;
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        roundRect(ctx, b.x, b.y, b.w, b.h, 16);
+        ctx.fill();
+        const s = 40;
+        ctx.save();
+        ctx.translate(b.x + b.w / 2 + 30, b.y + b.h - 40);
+        ctx.scale(s, -s);
+        ctx.translate(0, BALANCE.player.height / 2 + 0.5);
+        drawCharacter(ctx, p, CHARACTER_POSE.fours);
+        ctx.translate(BALANCE.player.bootOffsetX - 0.7, BALANCE.player.bootOffsetY - 0.5);
+        ctx.rotate(0.45);
+        ASSETS.boot.draw(ctx, 0);
+        ctx.restore();
+        ctx.fillStyle = THEME.uiText;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.font = font('display', 15);
+        ctx.fillText(this.playerLabel(), b.x + b.w / 2, b.y + 10);
+        const country = countryName(p.nationality);
+        if (country) {
+          ctx.font = font('text', 12);
+          ctx.fillStyle = THEME.uiTextSoft;
+          ctx.fillText(country, b.x + b.w / 2, b.y + 30);
+        }
+      },
+    });
+    y += 182;
+
+    // Name: native field.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('name')) });
+    this.nameBox = { x: x0, y: y + 26, w: cw, h: 42 };
+    y += 76;
+
+    // Gender.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('gender')) });
+    const gw = (cw - 12) / 3;
+    GENDERS.forEach((g, i) => {
+      items.push({
+        b: { x: x0 + i * (gw + 6), y: y + 26, w: gw, h: 36 },
+        draw: (b) => this.chip(b, t(`gender_${g}` as TextKey), p.gender === g),
+        tap: () => {
+          p.gender = g;
+          this.persist();
+        },
+      });
+    });
+    y += 70;
+
+    // Hair.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('hair')) });
+    const hw = (cw - 18) / 4;
+    HAIRSTYLES.forEach((h, i) => {
+      items.push({
+        b: { x: x0 + i * (hw + 6), y: y + 26, w: hw, h: 36 },
+        draw: (b) => this.chip(b, t(`hair_${h}` as TextKey), p.hair === h),
+        tap: () => {
+          p.hair = h;
+          this.persist();
+        },
+      });
+    });
+    y += 70;
+
+    // Nationality: native select, display only.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('nationality')) });
+    this.countryBox = { x: x0, y: y + 26, w: cw, h: 42 };
+    y += 76;
+
+    // Outfit.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('outfit')) });
+    const ow = (cw - 18) / 4;
+    OUTFIT_IDS.forEach((o, i) => {
+      const col = i % 4;
+      const rowI = Math.floor(i / 4);
+      items.push({
+        b: { x: x0 + col * (ow + 6), y: y + 26 + rowI * 42, w: ow, h: 36 },
+        draw: (b) => this.chip(b, t(`outfit_${o}` as TextKey), p.outfit === o),
+        tap: () => {
+          p.outfit = o;
+          this.persist();
+        },
+      });
+    });
+    y += 26 + 2 * 42 + 6;
+    const choice = (OUTFITS[p.outfit] as { shoeChoice?: readonly ('basses' | 'bulle')[] }).shoeChoice;
+    if (choice) {
+      const sw = (cw - 6) / 2;
+      choice.forEach((shoe, i) => {
+        items.push({
+          b: { x: x0 + i * (sw + 6), y, w: sw, h: 32 },
+          draw: (b) => this.chip(b, t(`shoes_${shoe}` as TextKey), (p.shoes ?? choice[0]) === shoe, 12),
+          tap: () => {
+            p.shoes = shoe;
+            this.persist();
+          },
+        });
+      });
+      y += 40;
+    }
+
+    // Colours: three closed palettes.
+    const groups: [TextKey, number][] = [
+      ['colourTop', 0],
+      ['colourLegs', 1],
+      ['colourShoes', 2],
+    ];
+    for (const [label, slot] of groups) {
+      items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t(label)) });
+      const sz = Math.min(30, (cw - 11 * 4) / 12);
+      FABRIC_COLOURS.forEach((c, i) => {
+        items.push({
+          b: { x: x0 + i * (sz + 4), y: y + 26, w: sz, h: sz },
+          draw: (b) => {
+            const ctx = this.ctx;
+            ctx.fillStyle = c;
+            roundRect(ctx, b.x, b.y, b.w, b.h, 6);
+            ctx.fill();
+            if (p.colours[slot] === i) {
+              ctx.lineWidth = 3;
+              ctx.strokeStyle = THEME.accent;
+              ctx.stroke();
+            }
+          },
+          tap: () => {
+            p.colours[slot] = i;
+            this.persist();
+          },
+        });
+      });
+      y += 26 + sz + 12;
+    }
+    return items;
+  }
+
+  private layoutTrophies(): Item[] {
+    const W = this.width;
+    const panelW = Math.min(W - 24, 420);
+    const x0 = (W - panelW) / 2 + 12;
+    const cw = panelW - 24;
+    const items: Item[] = [];
+    let y = 0;
+    for (const def of TROPHIES) {
+      const unlocked = this.save.trophies.includes(def.id);
+      items.push({
+        b: { x: x0, y, w: cw, h: 62 },
+        draw: (b) => {
+          const ctx = this.ctx;
+          ctx.fillStyle = unlocked ? 'rgba(255,197,49,0.22)' : 'rgba(255,255,255,0.08)';
+          roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+          ctx.fill();
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.font = font('display', 14);
+          ctx.fillStyle = unlocked ? THEME.accent : THEME.uiText;
+          ctx.fillText(`${unlocked ? '🏆 ' : ''}${trophyName(def.id)}`, b.x + 12, b.y + 16);
+          const target = this.trophyTargetText(def);
+          ctx.font = font('text', 11);
+          ctx.fillStyle = THEME.uiTextSoft;
+          ctx.fillText(`${trophyKindText(def.kind)} ${target}`, b.x + 12, b.y + 34, b.w - 110);
+          ctx.textAlign = 'right';
+          ctx.font = font('display', 13);
+          ctx.fillStyle = unlocked ? THEME.accent : THEME.uiTextSoft;
+          ctx.fillText(`+${def.reward} ●`, b.x + b.w - 12, b.y + 16);
+          const p = trophyProgress(def, this.save);
+          const ratio = unlocked ? 1 : Math.min(1, p.target > 0 ? p.value / p.target : 0);
+          ctx.fillStyle = 'rgba(255,255,255,0.12)';
+          roundRect(ctx, b.x + 12, b.y + 48, b.w - 24, 6, 3);
+          ctx.fill();
+          ctx.fillStyle = unlocked ? THEME.accent : '#2a9d8f';
+          roundRect(ctx, b.x + 12, b.y + 48, Math.max(6, (b.w - 24) * ratio), 6, 3);
+          ctx.fill();
+        },
+      });
+      y += 68;
+    }
+    return items;
+  }
+
+  private trophyTargetText(def: TrophyDef): string {
+    switch (def.kind) {
+      case 'stage':
+        return stageName(def.stage);
+      case 'layer':
+        return layerName(def.layer);
+      case 'shop':
+        return '';
+      default:
+        return `${def.value}`;
+    }
+  }
+
+  private layoutProfiles(): Item[] {
+    const W = this.width;
+    const panelW = Math.min(W - 24, 420);
+    const x0 = (W - panelW) / 2 + 12;
+    const cw = panelW - 24;
+    const items: Item[] = [];
+    const cards: [string, string, boolean][] = [
+      [t('profileDepart'), t('profileDepartLine'), true],
+      [t('profileEntrepreneur'), t('profileEntrepreneurLine'), false],
+      [t('profileDictator'), t('soonLine'), false],
+      [t('profileBoomer'), t('soonLine'), false],
+      [t('profilePoliticien'), t('soonLine'), false],
+      [t('profileFille'), t('profileFilleLine'), false],
+    ];
+    let y = 0;
+    cards.forEach(([name, line, playable], i) => {
+      const h = i === 1 ? 118 : 86;
+      items.push({
+        b: { x: x0, y, w: cw, h },
+        draw: (b) => {
+          const ctx = this.ctx;
+          ctx.fillStyle = playable ? 'rgba(42,157,143,0.35)' : 'rgba(255,255,255,0.06)';
+          roundRect(ctx, b.x, b.y, b.w, b.h, 14);
+          ctx.fill();
+          // Silhouette: the shared body, greyed when the profile is locked.
+          ctx.save();
+          ctx.translate(b.x + 44, b.y + b.h / 2 + 10);
+          ctx.scale(14, -14);
+          if (!playable) ctx.globalAlpha = 0.25;
+          const look = i === 1 ? { ...this.save.profile, outfit: 'costume' as const } : this.save.profile;
+          drawCharacter(ctx, look, CHARACTER_POSE.fours);
+          ctx.restore();
+          ctx.textBaseline = 'top';
+          ctx.textAlign = 'left';
+          ctx.font = font('display', 15);
+          ctx.fillStyle = playable ? THEME.uiText : THEME.uiTextSoft;
+          ctx.fillText(name, b.x + 96, b.y + 12, b.w - 176);
+          ctx.font = font('text', 11);
+          ctx.fillStyle = THEME.uiTextSoft;
+          this.wrapText(line, b.x + 96, b.y + 34, b.w - 108, 15);
+          ctx.textAlign = 'right';
+          ctx.font = font('display', 12);
+          ctx.fillStyle = playable ? THEME.accent : THEME.uiTextSoft;
+          ctx.fillText(playable ? t('playable') : t('soon'), b.x + b.w - 12, b.y + 12);
+        },
+      });
+      y += h + 8;
+    });
+    return items;
+  }
+
+  private layoutSettings(): Item[] {
+    const W = this.width;
+    const panelW = Math.min(W - 24, 420);
+    const x0 = (W - panelW) / 2 + 12;
+    const cw = panelW - 24;
+    const items: Item[] = [];
+    const s = this.save.settings;
+    let y = 0;
+    const toggle = (label: string, value: string, tap: () => void): void => {
+      items.push({
+        b: { x: x0, y, w: cw, h: 52 },
+        draw: (b) => {
+          const ctx = this.ctx;
+          ctx.fillStyle = 'rgba(255,255,255,0.08)';
+          roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+          ctx.fill();
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.font = font('display', 15);
+          ctx.fillStyle = THEME.uiText;
+          ctx.fillText(label, b.x + 14, b.y + b.h / 2);
+          this.chip({ x: b.x + b.w - 110, y: b.y + 10, w: 98, h: 32 }, value, true);
+        },
+        tap,
+      });
+      y += 60;
+    };
+    toggle(t('sound'), s.sound ? t('on') : t('off'), () => {
+      s.sound = !s.sound;
+      this.persist();
+    });
+    toggle(t('haptics'), s.haptics ? t('on') : t('off'), () => {
+      s.haptics = !s.haptics;
+      this.persist();
+    });
+    toggle(t('language'), t(`lang_${s.lang}` as TextKey), () => {
+      s.lang = s.lang === 'fr' ? 'en' : 'fr';
+      setLang(s.lang);
+      this.persist();
+    });
+
+    y += 12;
+    if (this.resetStep === 0) {
+      items.push({
+        b: { x: x0, y, w: cw, h: 48 },
+        draw: (b) => this.button(b, t('reset'), 'secondary', 15),
+        tap: () => {
+          this.resetStep = 1;
+        },
+      });
+    } else {
+      const question = this.resetStep === 1 ? t('resetConfirm1') : t('resetConfirm2');
+      items.push({
+        b: { x: x0, y, w: cw, h: 60 },
+        draw: (b) => {
+          this.ctx.textBaseline = 'top';
+          this.ctx.textAlign = 'left';
+          this.ctx.font = font('text', 13);
+          this.ctx.fillStyle = THEME.danger;
+          this.wrapText(question, b.x + 4, b.y + 4, b.w - 8, 18);
+        },
+      });
+      y += 66;
+      const half = (cw - 6) / 2;
+      if (this.resetStep === 1) {
+        items.push({
+          b: { x: x0, y, w: half, h: 44 },
+          draw: (b) => this.button(b, t('resetYes'), 'primary', 14),
+          tap: () => {
+            this.resetStep = 2;
+          },
+        });
+        items.push({
+          b: { x: x0 + half + 6, y, w: half, h: 44 },
+          draw: (b) => this.button(b, t('cancel'), 'secondary', 14),
+          tap: () => {
+            this.resetStep = 0;
+          },
+        });
+      } else {
+        items.push({
+          b: { x: x0, y, w: half, h: 44 },
+          draw: (b) => this.button(b, t('resetYes'), 'primary', 14),
+          tap: () => this.resetProgress(false),
+        });
+        items.push({
+          b: { x: x0 + half + 6, y, w: half, h: 44 },
+          draw: (b) => this.button(b, t('resetKeep'), 'secondary', 12),
+          tap: () => this.resetProgress(true),
+        });
+      }
+    }
+    return items;
+  }
+
+  private wrapText(text: string, x: number, y: number, maxWidth: number, lineHeight: number): void {
+    const ctx = this.ctx;
+    const words = text.split(' ');
+    let line = '';
+    let ly = y;
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, ly);
+        line = word;
+        ly += lineHeight;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, ly);
   }
 }

@@ -357,9 +357,48 @@ export const BALANCE = {
     bootOffsetY: 0.4,
   },
 
+  /** Trophies: country ones validate on distance (stage reached), sky ones on the run's max altitude (layer reached). */
+  trophies: [
+    { id: 'premier_lancer', kind: 'runs', value: 1, reward: 10 },
+    { id: 'sortie_arras', kind: 'stage', stage: 'somme', reward: 15 },
+    { id: 'somme', kind: 'stage', stage: 'paris', reward: 25 },
+    { id: 'paris', kind: 'stage', stage: 'campagne', reward: 40 },
+    { id: 'lyon', kind: 'stage', stage: 'lyon', reward: 60 },
+    { id: 'marseille', kind: 'stage', stage: 'marseille', reward: 90 },
+    { id: 'andorre', kind: 'stage', stage: 'pyrenees', reward: 130 },
+    { id: 'ole', kind: 'stage', stage: 'espagne', reward: 180 },
+    { id: 'gibraltar', kind: 'stage', stage: 'mediterranee', reward: 250 },
+    { id: 'maroc', kind: 'stage', stage: 'maroc', reward: 320 },
+    { id: 'alger', kind: 'stage', stage: 'algerie', reward: 400 },
+    { id: 'tunis', kind: 'stage', stage: 'tunisie', reward: 500 },
+    { id: 'nil', kind: 'stage', stage: 'soudan', reward: 650 },
+    { id: 'corne', kind: 'stage', stage: 'somalie', reward: 800 },
+    { id: 'fleuve', kind: 'stage', stage: 'congo', reward: 1000 },
+    { id: 'lagos', kind: 'stage', stage: 'nigeria', reward: 1300 },
+    { id: 'sable', kind: 'stage', stage: 'desert', reward: 2000 },
+    { id: 'mur_du_son', kind: 'barriers', value: 1, reward: 50 },
+    { id: 'stratosphere', kind: 'layer', layer: 'stratosphere', reward: 100 },
+    { id: 'orbite', kind: 'layer', layer: 'orbite', reward: 300 },
+    { id: 'lune', kind: 'layer', layer: 'lune', reward: 1000 },
+    { id: 'hors_de_tout', kind: 'layer', layer: 'espace', reward: 2500 },
+    { id: 'casse_briques', kind: 'walls', value: 10, reward: 80 },
+    { id: 'increvable', kind: 'controls', value: 3, reward: 150 },
+    { id: 'chaine_5', kind: 'chain', value: 5, reward: 120 },
+    { id: 'cent_parties', kind: 'runs', value: 100, reward: 200 },
+    { id: 'mille_pieces', kind: 'coins', value: 1000, reward: 100 },
+    { id: 'boutique_complete', kind: 'shop', value: 1, reward: 3000 },
+    { id: 'niveau_30', kind: 'level', value: 30, reward: 5000 },
+  ],
+
+  customisation: {
+    /** Characters allowed in the player's name. */
+    nameMaxLength: 16,
+    defaultName: 'Joueur',
+  },
+
   save: {
     storageKey: 'dehors.save',
-    schemaVersion: 2,
+    schemaVersion: 3,
   },
 } as const;
 
