@@ -17,11 +17,11 @@ npm run sim        # simulateur d'équilibrage (valeurs de balance.ts)
 
 - `src/config/balance.ts` : toutes les valeurs chiffrées du jeu, et nulle part ailleurs.
 - `src/core` : boucle à pas fixe (120 Hz), entrées, générateur aléatoire à graine.
-- `src/game` : physique, coup de pied, course, sauvegarde.
+- `src/game` : physique, coup de pied, course, monde, entités, progression (XP, niveaux, améliorations), sauvegarde.
 - `src/ui` : écrans, textes, formats.
 - `src/theme` : palette et sprites placeholder dessinés en code.
 - `src/telegram` : intégration du SDK (phase 5).
-- `tests` : physique, pas fixe, sauvegarde.
+- `tests` : physique, pas fixe, monde, entités, progression, sauvegarde et migration.
 
 ## Déploiement
 

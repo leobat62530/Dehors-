@@ -299,6 +299,50 @@ export const BALANCE = {
     distanceCoinEvery: 20,
     linearUntil: 2_000,
     exponent: 0.6,
+    /** Coin clusters in flight: clusters per 100 m, coins per cluster, face value growth per stage. */
+    clustersPer100m: 0.9,
+    clusterMin: 3,
+    clusterMax: 7,
+    /** Face value of a coin = 1 + floor(stageIndex × valuePerStage). */
+    valuePerStage: 0.5,
+    /** Free gift: every `giftHours`, pays `giftBase` + `giftPerLevel` × level. */
+    giftHours: 4,
+    giftBase: 30,
+    giftPerLevel: 5,
+  },
+
+  xp: {
+    /** XP = distance ÷ distanceDivisor + coins ÷ coinDivisor, distance part soft-capped like the coins. */
+    distanceDivisor: 15,
+    coinDivisor: 4,
+    distanceLinearUntil: 20_000,
+    distanceExponent: 0.6,
+    /** Level n needs levelBase × n^levelExponent points to go from n−1 to n. */
+    levelBase: 120,
+    levelExponent: 1.55,
+    maxLevel: 30,
+  },
+
+  /** Shop upgrades: effect per level, levels, start price, price multiplier per level, unlock level. */
+  upgrades: {
+    force: { levels: 10, price: 50, growth: 1.8, unlock: 1 },
+    semelles: { levels: 8, price: 80, growth: 1.9, unlock: 2 },
+    combinaison: { levels: 8, price: 100, growth: 1.9, unlock: 3 },
+    aimant: { levels: 6, price: 120, growth: 2.0, unlock: 5 },
+    fusee: { levels: 4, price: 300, growth: 2.5, unlock: 6 },
+    tremplin: { levels: 5, price: 500, growth: 2.2, unlock: 7 },
+    avocat: { levels: 3, price: 1_500, growth: 3.0, unlock: 10 },
+  },
+  upgradeEffects: {
+    /** Drag kept per "Combinaison" level. */
+    suitDragPerLevel: 0.93,
+    /** Extra pickup radius per "Aimant" level (m). */
+    magnetRadiusPerLevel: 0.5,
+    /** Rocket: speed multiplier and no-drag seconds per charge. */
+    rocketBoost: 2,
+    rocketSeconds: 2,
+    /** Start further by this many metres per "Tremplin" level. */
+    rampMetresPerLevel: 200,
   },
 
   /** Bouncer gain multiplier per "Semelles" level. */
@@ -315,7 +359,7 @@ export const BALANCE = {
 
   save: {
     storageKey: 'dehors.save',
-    schemaVersion: 1,
+    schemaVersion: 2,
   },
 } as const;
 

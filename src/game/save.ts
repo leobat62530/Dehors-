@@ -1,4 +1,5 @@
 import { BALANCE } from '../config/balance';
+import { UPGRADE_IDS, type UpgradeId } from './progress';
 
 /** Persistent progression. Versioned so future updates can migrate old saves. */
 export interface SaveData {
@@ -7,14 +8,38 @@ export interface SaveData {
   bestAltitude: number;
   runs: number;
   coins: number;
-  /** Player level, 1-based. XP arrives in phase 4. */
+  /** Coins ever earned, for trophies. */
+  totalCoins: number;
+  /** Player level, 1-based, derived from xp and kept for display. */
   level: number;
+  xp: number;
+  upgrades: Record<UpgradeId, number>;
   /** Equipped helmet and its remaining wall charges, null when none. */
   helmet: { id: string; charges: number } | null;
+  /** Timestamp (ms) of the last free gift, 0 when never taken. */
+  lastGift: number;
+}
+
+export function defaultUpgrades(): Record<UpgradeId, number> {
+  const u = {} as Record<UpgradeId, number>;
+  for (const id of UPGRADE_IDS) u[id] = 0;
+  return u;
 }
 
 export function defaultSave(): SaveData {
-  return { version: BALANCE.save.schemaVersion, bestDistance: 0, bestAltitude: 0, runs: 0, coins: 0, level: 1, helmet: null };
+  return {
+    version: BALANCE.save.schemaVersion,
+    bestDistance: 0,
+    bestAltitude: 0,
+    runs: 0,
+    coins: 0,
+    totalCoins: 0,
+    level: 1,
+    xp: 0,
+    upgrades: defaultUpgrades(),
+    helmet: null,
+    lastGift: 0,
+  };
 }
 
 /** Bring any stored object up to the current schema. Unknown or broken data gives a fresh save. */
@@ -27,14 +52,21 @@ export function migrate(raw: unknown): SaveData {
     r.helmet && typeof r.helmet === 'object' && typeof r.helmet.id === 'string' && num(r.helmet.charges) > 0
       ? { id: r.helmet.id, charges: Math.floor(num(r.helmet.charges)) }
       : null;
+  const upgrades = defaultUpgrades();
+  const ru = (r.upgrades ?? {}) as Partial<Record<UpgradeId, unknown>>;
+  for (const id of UPGRADE_IDS) upgrades[id] = Math.min(BALANCE.upgrades[id].levels, Math.floor(num(ru[id])));
   return {
     version: BALANCE.save.schemaVersion,
     bestDistance: num(r.bestDistance),
     bestAltitude: num(r.bestAltitude),
     runs: Math.floor(num(r.runs)),
     coins: Math.floor(num(r.coins)),
+    totalCoins: Math.floor(Math.max(num(r.totalCoins), num(r.coins))),
     level: Math.max(1, Math.floor(num(r.level))),
+    xp: Math.floor(num(r.xp)),
+    upgrades,
     helmet,
+    lastGift: Math.floor(num(r.lastGift)),
   };
 }
 

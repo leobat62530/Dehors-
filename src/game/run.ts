@@ -22,6 +22,14 @@ export type EndReason = 'stopped' | 'noProgress' | 'wall' | 'fatal';
 export interface Equipment {
   kickLevel: number;
   solesLevel: number;
+  /** "Combinaison": each level keeps less drag. */
+  suitLevel: number;
+  /** "Aimant": pickup radius. */
+  magnetLevel: number;
+  /** "Fusée d'appoint": manual boosts per run. */
+  rocketCharges: number;
+  /** "Tremplin": start further along the track. */
+  rampLevel: number;
   /** Walls the current helmet can still break, 0 when none. */
   helmetCharges: number;
   /** Fatal obstacles the lawyer can cancel this run. */
@@ -29,7 +37,7 @@ export interface Equipment {
 }
 
 export function defaultEquipment(): Equipment {
-  return { kickLevel: 0, solesLevel: 0, helmetCharges: 0, lawyerCharges: 0 };
+  return { kickLevel: 0, solesLevel: 0, suitLevel: 0, magnetLevel: 0, rocketCharges: 0, rampLevel: 0, helmetCharges: 0, lawyerCharges: 0 };
 }
 
 /** Events the run raises for the presentation layer (signs, flashes, haptics). */
@@ -43,6 +51,8 @@ export interface RunEvents {
   onObstacle?: (e: Entity) => void;
   onWall?: (e: Entity, broken: boolean) => void;
   onLawyer?: () => void;
+  onCoin?: (e: Entity) => void;
+  onRocket?: () => void;
 }
 
 /** One run, from the aim to the end screen. Pure game state, no rendering. */
@@ -86,6 +96,9 @@ export class Run {
   helmetCharges = 0;
   lawyerCharges = 0;
   lawyerUsed = 0;
+  rocketCharges = 0;
+  rocketsUsed = 0;
+  coinsPicked = 0;
 
   /** Booster effect: seconds left of no-drag, and wobble amplitude. */
   boostTime = 0;
@@ -161,6 +174,12 @@ export class Run {
     this.helmetCharges = this.equipment.helmetCharges;
     this.lawyerCharges = this.equipment.lawyerCharges;
     this.lawyerUsed = 0;
+    this.rocketCharges = this.equipment.rocketCharges;
+    this.rocketsUsed = 0;
+    this.coinsPicked = 0;
+    // "Tremplin de départ": the run starts further along the track.
+    this.body.x = this.equipment.rampLevel * BALANCE.upgradeEffects.rampMetresPerLevel;
+    this.prevX = this.body.x;
     this.boostTime = 0;
     this.boostKind = null;
     this.wobble = 0;
@@ -174,7 +193,12 @@ export class Run {
     this.noProgressTime = 0;
     this.lastBounces = 0;
     this.spawner.reset();
-    this.spawner.advance(this.rng, 0, 0);
+    this.spawner.advance(this.rng, this.body.x, 0);
+  }
+
+  /** Distance covered since the kick, without the ramp. */
+  get flownDistance(): number {
+    return Math.max(0, this.body.x - this.equipment.rampLevel * BALANCE.upgradeEffects.rampMetresPerLevel);
   }
 
   release(): boolean {
@@ -193,9 +217,25 @@ export class Run {
     this.timeScaleIndex = this.timeScaleIndex >= maxIndex ? 0 : this.timeScaleIndex + 1;
   }
 
-  /** A tap during flight: three quick ones shake off a clinging obstacle. Returns true when it detached. */
+  /**
+   * A tap during flight. With a clinger on board, three quick taps shake it off; otherwise the tap
+   * fires the rocket if a charge is left. Returns true when something happened.
+   */
   tap(): boolean {
-    if (this.phase !== 'flight' || !this.clingKind) return false;
+    if (this.phase !== 'flight') return false;
+    if (!this.clingKind) {
+      if (this.rocketCharges <= 0 || this.body.rolling) return false;
+      const R = BALANCE.upgradeEffects;
+      this.rocketCharges--;
+      this.rocketsUsed++;
+      this.body.vx *= R.rocketBoost;
+      this.body.vy = Math.max(this.body.vy, 0) * R.rocketBoost + 5;
+      this.body.rolling = false;
+      this.boostTime = Math.max(this.boostTime, R.rocketSeconds);
+      this.boostKind = 'jet';
+      this.events.onRocket?.();
+      return true;
+    }
     const C = BALANCE.clinger;
     if (this.time - this.clingTapTime > C.tapWindowSeconds) this.clingTaps = 0;
     this.clingTapTime = this.time;
@@ -248,8 +288,9 @@ export class Run {
       }
     }
     if (this.heavyDragTime > 0) this.heavyDragTime = Math.max(0, this.heavyDragTime - dt);
-    // Drag: none during the sound barrier or a booster, doubled under a barrel.
-    this.env.dragScale = this.barrierTime > 0 || this.boostTime > 0 ? 0 : this.heavyDragTime > 0 ? 2 : 1;
+    // Drag: none during the sound barrier or a booster, doubled under a barrel, reduced by the suit.
+    const suit = Math.pow(BALANCE.upgradeEffects.suitDragPerLevel, this.equipment.suitLevel);
+    this.env.dragScale = this.barrierTime > 0 || this.boostTime > 0 ? 0 : (this.heavyDragTime > 0 ? 2 : 1) * suit;
 
     if (this.clingKind) {
       const keep = Math.pow(1 - this.clingRate, dt);
@@ -266,9 +307,19 @@ export class Run {
     const bounced = b.bounces !== this.lastBounces;
     this.lastBounces = b.bounces;
     if (b.y > 0 && !b.rolling) this.bouncerChainTick(dt);
+    const magnet = this.equipment.magnetLevel * BALANCE.upgradeEffects.magnetRadiusPerLevel;
 
     for (const e of this.pool.items) {
       if (!e.active || e.used) continue;
+      if (e.type === 'coin') {
+        if (overlaps(b.x, b.y, P.width, P.height, e, magnet)) {
+          e.used = true;
+          this.coins += e.value;
+          this.coinsPicked++;
+          this.events.onCoin?.(e);
+        }
+        continue;
+      }
       if (e.type === 'wall') {
         if (this.prevX < e.x && b.x >= e.x && b.y < e.h && b.y < BALANCE.altitude.tropopause) this.hitWall(e);
         continue;

@@ -8,7 +8,7 @@ export type ObstacleKind = keyof typeof BALANCE.obstacleEffects;
 export type ProfileId = keyof typeof BALANCE.profiles;
 export type HelmetId = (typeof BALANCE.helmets)[number]['id'];
 
-export type EntityType = 'bouncer' | 'booster' | 'obstacle' | 'wall';
+export type EntityType = 'bouncer' | 'booster' | 'obstacle' | 'wall' | 'coin';
 
 /** One pooled world object. Fields are reused, nothing is allocated during a run. */
 export interface Entity {
@@ -26,12 +26,14 @@ export interface Entity {
   stageIndex: number;
   /** Seconds since consumed, for the pop or shatter animation. */
   usedTime: number;
+  /** Face value of a coin. */
+  value: number;
 }
 
 const POOL_SIZE = 320;
 
 function blank(): Entity {
-  return { active: false, type: 'bouncer', kind: '', x: 0, y: 0, w: 0, h: 0, used: false, seed: 0, stageIndex: 0, usedTime: 0 };
+  return { active: false, type: 'bouncer', kind: '', x: 0, y: 0, w: 0, h: 0, used: false, seed: 0, stageIndex: 0, usedTime: 0, value: 0 };
 }
 
 export class EntityPool {
@@ -176,6 +178,31 @@ export class Spawner {
         this.place('obstacle', kind, rng.range(cx, cx + S.chunk), rng.range(bandBottom, bandTop), 2.4, 2.6, rng, stageIndex);
       }
 
+      // Coin clusters: a short line or arc, face value growing with the stage.
+      const E = BALANCE.economy;
+      const nClusters = poisson(rng, E.clustersPer100m * scale);
+      const value = 1 + Math.floor(stageIndex * E.valuePerStage);
+      for (let c = 0; c < nClusters; c++) {
+        const n = rng.int(E.clusterMin, E.clusterMax);
+        const x0 = rng.range(cx, cx + S.chunk);
+        const y0 = rng.range(bandBottom, bandTop);
+        const arc = rng.next() < 0.5;
+        for (let i = 0; i < n; i++) {
+          const yy = arc ? y0 + Math.sin((i / (n - 1)) * Math.PI) * 4 : y0;
+          const e = this.pool.alloc();
+          if (!e) break;
+          e.type = 'coin';
+          e.kind = 'coin';
+          e.x = x0 + i * 2.2;
+          e.y = yy;
+          e.w = 1;
+          e.h = 1;
+          e.seed = rng.next();
+          e.stageIndex = stageIndex;
+          e.value = value;
+        }
+      }
+
       // Walls, at the stage's interval. They only exist in the troposphere.
       while (this.nextWallX < cx + S.chunk) {
         const wallStage = S.stages[stageAt(this.nextWallX).id];
@@ -199,7 +226,9 @@ export class Spawner {
   }
 }
 
-/** Axis-aligned overlap between the character box and an entity box (both bottom-left anchored at (x - w/2, y)). */
-export function overlaps(px: number, py: number, pw: number, ph: number, e: Entity): boolean {
-  return px + pw / 2 > e.x - e.w / 2 && px - pw / 2 < e.x + e.w / 2 && py + ph > e.y && py < e.y + e.h;
+/** Axis-aligned overlap between the character box and an entity box (both bottom-centre anchored), grown by `pad` metres. */
+export function overlaps(px: number, py: number, pw: number, ph: number, e: Entity, pad = 0): boolean {
+  return (
+    px + pw / 2 + pad > e.x - e.w / 2 && px - pw / 2 - pad < e.x + e.w / 2 && py + ph + pad > e.y && py - pad < e.y + e.h
+  );
 }

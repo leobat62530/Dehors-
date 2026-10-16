@@ -24,6 +24,38 @@ const fr = {
   coinsRun: 'Pièces de la course',
   coinsTotal: 'Pièces',
   shopHelmets: 'Casques',
+  shopUpgrades: 'Améliorations',
+  shop: 'Boutique',
+  play: 'Jouer',
+  home: 'Accueil',
+  back: 'Retour',
+  level: 'Niveau',
+  xp: 'XP',
+  gift: 'Lot gratuit',
+  giftIn: 'Prochain lot dans',
+  bestDistance: 'Record de distance',
+  bestAltitude: 'Record d’altitude',
+  maxed: 'Max',
+  soon: 'Bientôt',
+  customize: 'Personnaliser',
+  trophies: 'Trophées',
+  profiles: 'Profils',
+  settings: 'Réglages',
+  levelUp: 'Niveau supérieur !',
+  up_force: 'Force du coup',
+  up_semelles: 'Semelles',
+  up_combinaison: 'Combinaison',
+  up_aimant: 'Aimant à pièces',
+  up_fusee: 'Fusée d’appoint',
+  up_tremplin: 'Tremplin de départ',
+  up_avocat: 'Avocat',
+  fx_force: '+9 % de vitesse initiale',
+  fx_semelles: '+8 % de rebond et de gain des rebondisseurs',
+  fx_combinaison: '−7 % de traînée',
+  fx_aimant: '+0,5 m de rayon de ramassage',
+  fx_fusee: '+1 fusée ×2 pendant 2 s (un appui en vol)',
+  fx_tremplin: 'Départ 200 m plus loin',
+  fx_avocat: 'Annule le contrôle fatal, une fois par partie',
   buy: 'Acheter',
   owned: 'Équipé',
   locked: 'Niveau',
@@ -83,6 +115,14 @@ export function stageName(id: string): string {
 
 export function fatalText(kind: string): string {
   return t(`fatal_${kind}` as TextKey);
+}
+
+export function upgradeName(id: string): string {
+  return t(`up_${id}` as TextKey);
+}
+
+export function upgradeEffect(id: string): string {
+  return t(`fx_${id}` as TextKey);
 }
 
 export function helmetName(id: string): string {
