@@ -115,8 +115,16 @@ export const BALANCE = {
   timeScale: {
     /** Time accelerator steps the player cycles through during flight. */
     steps: [1, 2, 5, 10],
-    /** Index of the highest step available without unlock (phase 4 gates the rest). */
-    freeMaxIndex: 3,
+    /**
+     * Each step after ×1 opens at a level, or earlier with premium currency (0 = never sold).
+     * The pass opens every step up to `passIndex`.
+     */
+    unlocks: [
+      { index: 1, level: 3, billets: 0 },
+      { index: 2, level: 12, billets: 40 },
+      { index: 3, level: 20, billets: 90 },
+    ],
+    passIndex: 2,
   },
 
   signs: {
@@ -413,9 +421,112 @@ export const BALANCE = {
     defaultName: 'Joueur',
   },
 
+  /**
+   * Premium economy. "Billets" are bought in Telegram Stars (the only payment Telegram allows
+   * for digital goods) and earned in small amounts for free. Everything paid is known in advance:
+   * no paid random content, ever.
+   */
+  premium: {
+    /** Billets packs sold in Stars. `bonus` billets come on top, growing with the pack. */
+    billetPacks: [
+      { id: 'billets_s', stars: 50, billets: 50, bonus: 0 },
+      { id: 'billets_m', stars: 200, billets: 200, bonus: 40 },
+      { id: 'billets_l', stars: 500, billets: 500, bonus: 175 },
+    ],
+    /** Coin packs paid in billets; coins scale with the level so a pack stays useful late. */
+    coinPacks: [
+      { id: 'pieces_s', billets: 20, coinsBase: 300, coinsPerLevel: 60 },
+      { id: 'pieces_m', billets: 60, coinsBase: 1_100, coinsPerLevel: 220 },
+      { id: 'pieces_l', billets: 150, coinsBase: 3_200, coinsPerLevel: 640 },
+    ],
+    /** Monthly pass: coin multiplier, time accelerator to ×5, gift period halved. */
+    pass: { id: 'pass', stars: 250, days: 30, coinMultiplier: 2, giftHours: 2 },
+    /**
+     * Starter pack, shown once, when the player stalls for the first time, for `hours`.
+     * Pays billets and coins at a discount (the equivalent of billets_m plus pieces_m).
+     */
+    starter: { id: 'starter', stars: 100, billets: 150, coinsBase: 1_100, coinsPerLevel: 220, hours: 24 },
+    /** One-run gadgets, bought in coins or billets, consumed at the next kick. */
+    gadgets: [
+      { id: 'fusee_longue', coins: 400, billets: 8, rockets: 2, magnet: 0, lawyer: 0, soles: 0 },
+      { id: 'aimant_geant', coins: 250, billets: 5, rockets: 0, magnet: 4, lawyer: 0, soles: 0 },
+      { id: 'bouclier', coins: 900, billets: 15, rockets: 0, magnet: 0, lawyer: 1, soles: 0 },
+      { id: 'double_rebond', coins: 350, billets: 7, rockets: 0, magnet: 0, lawyer: 0, soles: 4 },
+    ],
+    /** Gadgets held at once, per kind. */
+    gadgetMax: 9,
+    /** Stars a player may spend per calendar day, and the confirmation every purchase needs. */
+    dailyStarsCap: 1_000,
+    /** Runs after a purchase during which the end screen shows the gain against the player's average. */
+    boostRuns: 3,
+    /** Runs kept to compute that average. */
+    recentRuns: 5,
+  },
+
+  /** Free daily wheel: segments with their weight; `coins` scale with the level, `billets` do not. */
+  wheel: {
+    segments: [
+      { coinsBase: 20, coinsPerLevel: 4, billets: 0, weight: 24 },
+      { coinsBase: 40, coinsPerLevel: 8, billets: 0, weight: 20 },
+      { coinsBase: 0, coinsPerLevel: 0, billets: 1, weight: 12 },
+      { coinsBase: 80, coinsPerLevel: 16, billets: 0, weight: 16 },
+      { coinsBase: 30, coinsPerLevel: 6, billets: 0, weight: 20 },
+      { coinsBase: 0, coinsPerLevel: 0, billets: 3, weight: 4 },
+      { coinsBase: 150, coinsPerLevel: 30, billets: 0, weight: 8 },
+      { coinsBase: 400, coinsPerLevel: 80, billets: 0, weight: 2 },
+    ],
+    /** Spin duration (s) and turns before the wheel settles. */
+    spinSeconds: 3.4,
+    turns: 5,
+    /** Segments from this index up are jackpots (coin rain, sound, haptic). */
+    jackpotFrom: 6,
+  },
+
+  /** Login streak: day 1 to 7, then day 7 repeats. Coins scale with the level; billets on the last day. */
+  streak: {
+    coinsBase: [10, 20, 35, 50, 80, 120, 200],
+    coinsPerLevel: [2, 4, 7, 10, 16, 24, 40],
+    billets: [0, 0, 1, 0, 0, 1, 3],
+    /** Missing more than this many days breaks the streak. */
+    graceDays: 1,
+  },
+
+  /** Daily challenges: three per day, drawn from these kinds; targets scale with the best distance. */
+  challenges: {
+    perDay: 3,
+    kinds: [
+      { kind: 'distance', share: 0.7, min: 150, coins: 60, billets: 0 },
+      { kind: 'coins', share: 0, min: 25, coins: 50, billets: 0 },
+      { kind: 'runs', share: 0, min: 5, coins: 40, billets: 1 },
+      { kind: 'chain', share: 0, min: 3, coins: 70, billets: 0 },
+      { kind: 'altitude', share: 0.6, min: 40, coins: 60, billets: 0 },
+      { kind: 'walls', share: 0, min: 2, coins: 80, billets: 1 },
+    ],
+    /** Coin rewards scale with the level too. */
+    coinsPerLevel: 8,
+  },
+
+  /** Rules that pay a bonus when the behaviour says the player is about to leave. */
+  retention: {
+    /** Runs in a row under `stallShare` × best distance before a free chest. */
+    stallRuns: 3,
+    stallShare: 0.9,
+    stallCoinsFactor: 1.5,
+    /** Minutes of session before the coin rain (once per session). */
+    sessionMinutes: 15,
+    sessionCoinsFactor: 2,
+    /** Days away before the welcome-back gift (coins and billets). */
+    returnDays: 2,
+    returnCoinsFactor: 3,
+    returnBillets: 2,
+  },
+
+  /** "Almost there" line on the end screen: within this share of the next border. */
+  nearMiss: { share: 0.2 },
+
   save: {
     storageKey: 'dehors.save',
-    schemaVersion: 3,
+    schemaVersion: 4,
   },
 } as const;
 

@@ -1,14 +1,50 @@
 import { BALANCE, launchSpeed } from '../config/balance';
 import { COUNTRIES, countryName, flagOf } from '../config/countries';
 import { GAME_URL } from '../config/links';
+import { track } from '../core/analytics';
 import { Sounds } from '../core/audio';
 import type { PointerListener } from '../core/input';
-import { newSeed } from '../core/rng';
+import { newSeed, Rng } from '../core/rng';
 import { aimFromDrag } from '../game/kick';
 import { speedOf } from '../game/physics';
+import {
+  buyCoinPack,
+  buyGadget,
+  buyTimeScale,
+  coinMultiplier,
+  coinPackAmount,
+  consumeGadgets,
+  gadgetBonuses,
+  giftHours,
+  grantStarsProduct,
+  maxTimeScaleIndex,
+  nextTimeScaleUnlock,
+  passActive,
+  starsLeftToday,
+  starsPrice,
+  type StarsProductId,
+  startBoostWindow,
+  starterAvailable,
+} from '../game/premium';
 import { giftAmount, giftCooldown, levelFromXp, UPGRADE_IDS, upgradeMaxed, upgradePrice, xpForRun } from '../game/progress';
+import {
+  type Bonus,
+  claimChallenge,
+  dailyChallenges,
+  nearMiss,
+  progressChallenges,
+  recordRun,
+  returnBonus,
+  type Reward,
+  runBonus,
+  spinWheel,
+  syncChallenges,
+  touchStreak,
+  wheelAvailable,
+  wheelReward,
+} from '../game/retention';
 import { defaultEquipment, Run } from '../game/run';
-import { cleanName, defaultSave, type KeyValueStore, loadSave, type SaveData, writeSave } from '../game/save';
+import { cleanName, defaultSave, type GadgetId, type KeyValueStore, loadSave, type SaveData, writeSave } from '../game/save';
 import { GhostTrajectory } from '../game/trajectory';
 import { awardTrophies, TROPHIES, type TrophyDef, trophyProgress } from '../game/trophies';
 import { LAYERS, STAGES, stageAt } from '../game/world';
@@ -34,6 +70,7 @@ import {
   upgradeEffect,
   upgradeName,
 } from './i18n';
+import { paymentsAvailable, requestPurchase } from '../telegram/payments';
 import { haptic, type HapticKind, type Insets, type TelegramWebApp } from '../telegram/webapp';
 import { drawBanner, drawShockWave, Particles, Trail } from './fx';
 import { createOverlay, type Overlay } from './overlay';
@@ -65,8 +102,22 @@ function formatCooldown(seconds: number): string {
   return h > 0 ? `${h} h ${String(m).padStart(2, '0')}` : `${m} min`;
 }
 
-type Screen = 'home' | 'game' | 'shop' | 'customize' | 'trophies' | 'profiles' | 'settings';
+type Screen = 'home' | 'game' | 'shop' | 'customize' | 'trophies' | 'profiles' | 'settings' | 'premium' | 'challenges' | 'wheel';
 type ShopTab = 'upgrades' | 'helmets';
+
+/** "+40 ●" / "+1 🎟", or both. */
+function rewardText(r: Reward): string {
+  const parts: string[] = [];
+  if (r.coins > 0) parts.push(`+${r.coins} ●`);
+  if (r.billets > 0) parts.push(`+${r.billets} 🎟`);
+  return parts.join(' ');
+}
+
+function fill(text: string, values: Record<string, string | number>): string {
+  let out = text;
+  for (const k in values) out = out.replace(`{${k}}`, String(values[k]));
+  return out;
+}
 
 /** One element of a scrolling list screen: its box in content coordinates, how to draw it, what a tap does. */
 interface Item {
@@ -75,7 +126,7 @@ interface Item {
   tap?: () => void;
 }
 
-const SCROLL_SCREENS: readonly Screen[] = ['customize', 'trophies', 'profiles', 'settings'];
+const SCROLL_SCREENS: readonly Screen[] = ['customize', 'trophies', 'profiles', 'settings', 'premium', 'challenges'];
 
 /** Game screen: home, aim, kick, flight, end screen, shop and the menus. Owns the canvas and the current run. */
 export class App implements PointerListener {
@@ -144,6 +195,37 @@ export class App implements PointerListener {
   private newTrophies: TrophyDef[] = [];
   private sharedTime = 0;
 
+  // economy and retention
+  private sessionStart = 0;
+  private sessionPaid = false;
+  private nextDailyCheck = 0;
+  /** Short message on the home screen (streak, welcome back) and its seconds left. */
+  private homeNotice = '';
+  private homeNoticeTime = 0;
+  /** Short message on the premium screen (payment result, cap) and its seconds left. */
+  private premiumNotice = '';
+  private premiumNoticeTime = 0;
+  /** Stars product waiting for its confirmation tap, and whether an invoice is open. */
+  private confirmId: StarsProductId | null = null;
+  private buying = false;
+  private endBonus: Bonus | null = null;
+  private endChallenges = 0;
+  private endNearMiss: { metres: number; stageId: string } | null = null;
+  private boostGain = 0;
+  private starterJustOffered = false;
+  // wheel
+  private wheelSpinning = false;
+  private wheelTime = 0;
+  private wheelFrom = 0;
+  private wheelTo = 0;
+  private wheelAngle = 0;
+  private wheelResult = -1;
+  private wheelPrize: Reward | null = null;
+  private wheelTick = 0;
+  private readonly confetti = new Particles(96);
+  private readonly spinButton = btn();
+  private readonly dailyButtons: Button[] = [btn(), btn(), btn()];
+
   // buttons
   private readonly replayButton = btn();
   private readonly shareButton = btn();
@@ -183,6 +265,7 @@ export class App implements PointerListener {
     this.save.level = levelFromXp(this.save.xp).level;
     setLang(this.save.settings.lang);
     this.sounds.enabled = this.save.settings.sound;
+    this.startSession();
     this.applyEquipment();
     this.run = new Run(newSeed(), this.equipment, 'depart', {
       onObstacle: (e) => {
@@ -253,18 +336,46 @@ export class App implements PointerListener {
     this.resize();
   }
 
-  /** The run reads its equipment from this object; it mirrors the save's upgrades. */
+  /** The run reads its equipment from this object; it mirrors the save's upgrades plus the gadgets held. */
   private applyEquipment(): void {
     const u = this.save.upgrades;
+    const g = gadgetBonuses(this.save);
     const eq = this.equipment;
     eq.kickLevel = u.force;
-    eq.solesLevel = u.semelles;
+    eq.solesLevel = u.semelles + g.soles;
     eq.suitLevel = u.combinaison;
-    eq.magnetLevel = u.aimant;
-    eq.rocketCharges = u.fusee;
+    eq.magnetLevel = u.aimant + g.magnet;
+    eq.rocketCharges = u.fusee + g.rockets;
     eq.rampLevel = u.tremplin;
-    eq.lawyerCharges = u.avocat;
+    eq.lawyerCharges = u.avocat + g.lawyer;
     eq.helmetCharges = this.save.helmet?.charges ?? 0;
+  }
+
+  /** Session start: welcome-back gift, login streak, today's challenges, one anonymous event. */
+  private startSession(): void {
+    const now = Date.now();
+    this.now = now;
+    this.sessionStart = now;
+    this.sessionPaid = false;
+    const back = returnBonus(this.save, now);
+    syncChallenges(this.save, now);
+    const streak = touchStreak(this.save, now);
+    if (back) this.notice(`${t('bonus_return')} ${rewardText(back.reward)}`, 8);
+    else if (streak) this.notice(fill(t('streakLine'), { day: streak.day, reward: rewardText(streak.reward) }), 8);
+    awardTrophies(this.save);
+    this.nextDailyCheck = now + 60_000;
+    track('session_start', { level: this.save.level, runs: this.save.runs, streak: this.save.daily.streakDay, pass: passActive(this.save, now) });
+    this.persist();
+  }
+
+  private notice(text: string, seconds: number): void {
+    this.homeNotice = text;
+    this.homeNoticeTime = seconds;
+  }
+
+  private premiumMessage(text: string): void {
+    this.premiumNotice = text;
+    this.premiumNoticeTime = 3;
   }
 
   private persist(): void {
@@ -305,6 +416,11 @@ export class App implements PointerListener {
     Object.assign(this.giftButton, { x: bx + bw / 2 + 6, y: H * 0.5 + 86, w: bw / 2 - 6, h: 48 });
     const sw = (bw - 18) / 4;
     this.menuButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (sw + 6), y: H * 0.5 + 148, w: sw, h: 56 }));
+    const dw = (bw - 12) / 3;
+    this.dailyButtons.forEach((b, i) => Object.assign(b, { x: bx + i * (dw + 6), y: H * 0.5 + 212, w: dw, h: 44 }));
+
+    // wheel
+    Object.assign(this.spinButton, { x: bx, y: H - 136 - B, w: bw, h: 56 });
 
     // shop and list screens
     const panelW = Math.min(W - 24, 420);
@@ -334,12 +450,20 @@ export class App implements PointerListener {
       if (inside(this.playButton, x, y)) this.screen = 'game';
       else if (inside(this.homeShopButton, x, y)) this.openShop('home');
       else if (inside(this.giftButton, x, y)) this.claimGift();
+      else if (inside(this.dailyButtons[0]!, x, y)) this.openWheel();
+      else if (inside(this.dailyButtons[1]!, x, y)) this.openList('challenges');
+      else if (inside(this.dailyButtons[2]!, x, y)) this.openList('premium');
       else {
         const targets: Screen[] = ['customize', 'trophies', 'profiles', 'settings'];
         this.menuButtons.forEach((b, i) => {
           if (inside(b, x, y)) this.openList(targets[i]!);
         });
       }
+      return;
+    }
+    if (this.screen === 'wheel') {
+      if (inside(this.spinButton, x, y)) this.spin();
+      else if (inside(this.backButton, x, y) && !this.wheelSpinning) this.screen = 'home';
       return;
     }
     if (this.screen === 'shop') {
@@ -370,7 +494,7 @@ export class App implements PointerListener {
       return;
     }
     if (run.phase === 'flight' && inside(this.speedButton, x, y)) {
-      run.cycleTimeScale();
+      run.cycleTimeScale(maxTimeScaleIndex(this.save, this.now));
       return;
     }
     if (run.phase === 'flight') {
@@ -422,7 +546,11 @@ export class App implements PointerListener {
       return;
     }
     if (this.screen !== 'game' || !this.run.aiming) return;
-    if (this.run.release()) this.sounds.play('kick');
+    if (this.run.release()) {
+      this.sounds.play('kick');
+      // Gadgets armed for this run are spent at the kick.
+      if (consumeGadgets(this.save).length > 0) this.persist();
+    }
   }
 
   private updateAim(): void {
@@ -434,13 +562,16 @@ export class App implements PointerListener {
   private openShop(from: Screen): void {
     this.shopReturn = from;
     this.screen = 'shop';
+    track('shop_open', { coins: this.save.coins, level: this.save.level });
   }
 
   private openList(screen: Screen): void {
     this.screen = screen;
     this.scrollY = 0;
     this.resetStep = 0;
+    this.confirmId = null;
     this.relayout = true;
+    if (screen === 'premium') track('premium_open', { billets: this.save.premium.billets, level: this.save.level });
     if (this.overlay) {
       this.overlay.input.value = this.save.profile.name;
       this.overlay.select.value = this.save.profile.nationality;
@@ -499,7 +630,7 @@ export class App implements PointerListener {
   }
 
   private claimGift(): void {
-    if (giftCooldown(this.save.lastGift, this.now) > 0) return;
+    if (giftCooldown(this.save.lastGift, this.now, giftHours(this.save, this.now)) > 0) return;
     const amount = giftAmount(this.save.level);
     this.save.coins += amount;
     this.save.totalCoins += amount;
@@ -538,6 +669,11 @@ export class App implements PointerListener {
     this.runXp = 0;
     this.newTrophies = [];
     this.sharedTime = 0;
+    this.endBonus = null;
+    this.endChallenges = 0;
+    this.endNearMiss = null;
+    this.boostGain = 0;
+    this.starterJustOffered = false;
     this.paused = false;
     this.lawyerTime = 0;
     this.stageSignTime = 0;
@@ -563,6 +699,20 @@ export class App implements PointerListener {
     this.now = Date.now();
     if (this.giftFlash > 0) this.giftFlash = Math.max(0, this.giftFlash - dt);
     if (this.sharedTime > 0) this.sharedTime = Math.max(0, this.sharedTime - dt);
+    if (this.homeNoticeTime > 0) this.homeNoticeTime = Math.max(0, this.homeNoticeTime - dt);
+    if (this.premiumNoticeTime > 0) this.premiumNoticeTime = Math.max(0, this.premiumNoticeTime - dt);
+    if (this.now >= this.nextDailyCheck) {
+      // Past midnight with the game open: the streak and the challenges roll over.
+      this.nextDailyCheck = this.now + 60_000;
+      const streak = touchStreak(this.save, this.now);
+      syncChallenges(this.save, this.now);
+      if (streak) {
+        this.notice(fill(t('streakLine'), { day: streak.day, reward: rewardText(streak.reward) }), 8);
+        this.relayout = true;
+        this.persist();
+      }
+    }
+    if (this.screen === 'wheel') this.updateWheel(dt);
     if (this.paused || this.screen !== 'game') {
       // Home and menus keep the scenery alive behind them, without advancing the run.
       this.run.time += dt;
@@ -632,6 +782,8 @@ export class App implements PointerListener {
   private finishRun(): void {
     const run = this.run;
     const save = this.save;
+    const now = this.now;
+    const bestBefore = save.bestDistance;
     save.runs++;
     if (run.endReason === 'fatal') this.buzz('fatal');
     if (run.distance > save.bestDistance) {
@@ -642,9 +794,37 @@ export class App implements PointerListener {
       this.newAltitudeRecord = save.bestAltitude > 0;
       save.bestAltitude = run.maxAltitude;
     }
-    const earned = run.coins + run.distanceCoins;
+    const earned = (run.coins + run.distanceCoins) * coinMultiplier(save, now);
     save.coins += earned;
     save.totalCoins += earned;
+    // Purchase felt: the gain against the average of the runs before it, for a few runs.
+    if (save.retention.boostRuns > 0) {
+      save.retention.boostRuns--;
+      this.boostGain = Math.max(0, run.distance - save.retention.boostBaseline);
+    }
+    recordRun(save, run.distance);
+    const offeredBefore = save.premium.starterOfferedAt;
+    this.endBonus = runBonus(save, now, run.distance, bestBefore, this.sessionStart, this.sessionPaid);
+    if (this.endBonus?.kind === 'session') this.sessionPaid = true;
+    this.starterJustOffered = offeredBefore === 0 && save.premium.starterOfferedAt !== 0;
+    this.endChallenges = progressChallenges(save, now, {
+      distance: run.distance,
+      maxAltitude: run.maxAltitude,
+      coinsPicked: run.coinsPicked,
+      bestChain: run.bestBouncerChain,
+      wallsBroken: run.wallsBroken,
+    }).length;
+    this.endNearMiss = nearMiss(run.distance);
+    const stage = STAGES[run.maxStageIndex] ?? STAGES[0]!;
+    track('run_end', {
+      distance: Math.round(run.distance),
+      altitude: Math.round(run.maxAltitude),
+      stage: stage.id,
+      reason: run.endReason ?? 'stopped',
+      seconds: Math.round(run.time),
+      timeScale: run.timeScale,
+      bonus: this.endBonus?.kind ?? '',
+    });
     this.runXp = xpForRun(run.distance, earned);
     const before = save.level;
     save.xp += this.runXp;
@@ -703,6 +883,10 @@ export class App implements PointerListener {
     }
     if (this.screen === 'shop') {
       this.drawShop();
+      return;
+    }
+    if (this.screen === 'wheel') {
+      this.drawWheel();
       return;
     }
     if (SCROLL_SCREENS.includes(this.screen)) {
@@ -1172,7 +1356,7 @@ export class App implements PointerListener {
     const rows: [string, string][] = [
       [t('bestDistance'), this.save.bestDistance > 0 ? formatDistance(this.save.bestDistance) : '—'],
       [t('bestAltitude'), this.save.bestAltitude > 0 ? formatAltitude(this.save.bestAltitude) : '—'],
-      [t('coinsTotal'), `${this.save.coins} ●`],
+      [t('coinsTotal'), `${this.save.coins} ●   ${this.save.premium.billets} 🎟`],
     ];
     let y = panelY + 44;
     for (const [label, value] of rows) {
@@ -1185,10 +1369,29 @@ export class App implements PointerListener {
       y += 26;
     }
     this.drawXpBar(panelX + 20, y + 6, panelW - 40);
+    if (passActive(this.save, this.now)) {
+      ctx.textAlign = 'right';
+      ctx.font = font('display', 12);
+      ctx.fillStyle = THEME.accent;
+      ctx.fillText(t('pass'), panelX + panelW - 20, panelY + 16);
+    }
+    if (this.homeNoticeTime > 0 && this.homeNotice) {
+      ctx.globalAlpha = Math.min(1, this.homeNoticeTime);
+      ctx.fillStyle = THEME.accent;
+      roundRect(ctx, panelX, panelY - 34, panelW, 28, 14);
+      ctx.fill();
+      ctx.fillStyle = THEME.ui;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = font('display', 13);
+      ctx.fillText(this.homeNotice, W / 2, panelY - 20, panelW - 16);
+      ctx.globalAlpha = 1;
+      ctx.textBaseline = 'top';
+    }
 
     this.button(this.playButton, t('play'), 'primary', 30);
     this.button(this.homeShopButton, t('shop'), 'secondary', 17);
-    const cooldown = giftCooldown(this.save.lastGift, this.now);
+    const cooldown = giftCooldown(this.save.lastGift, this.now, giftHours(this.save, this.now));
     if (cooldown > 0) {
       this.button(this.giftButton, `${t('giftIn')} ${formatCooldown(cooldown)}`, 'disabled', 12);
     } else {
@@ -1205,6 +1408,22 @@ export class App implements PointerListener {
     }
     const labels: string[] = [t('customize'), t('trophies'), t('profiles'), t('settings')];
     this.menuButtons.forEach((b, i) => this.button(b, labels[i] ?? '', 'secondary', 11));
+
+    // Daily loops: wheel, challenges, premium. A dot marks what is waiting.
+    const wheelReady = wheelAvailable(this.save, this.now);
+    const claimable = this.claimableChallenges();
+    this.button(this.dailyButtons[0]!, t('wheel'), wheelReady ? 'primary' : 'secondary', 13);
+    this.button(this.dailyButtons[1]!, claimable > 0 ? `${t('challenges')} (${claimable})` : t('challenges'), claimable > 0 ? 'primary' : 'secondary', 13);
+    this.button(this.dailyButtons[2]!, `${t('billets')} 🎟`, starterAvailable(this.save, this.now) ? 'primary' : 'secondary', 13);
+  }
+
+  private claimableChallenges(): number {
+    const list = dailyChallenges(this.save.daily.challengeDay, this.save);
+    let n = 0;
+    list.forEach((c, i) => {
+      if (!this.save.daily.challengeClaimed[i] && (this.save.daily.challengeProgress[i] ?? 0) >= c.target) n++;
+    });
+    return n;
   }
 
   private drawEndScreen(): void {
@@ -1215,11 +1434,20 @@ export class App implements PointerListener {
     ctx.fillStyle = THEME.shade;
     ctx.fillRect(0, 0, W, H);
 
+    // Lines that make the run's extras visible: bonus, gain since a purchase, near miss, challenge.
+    const extras: [string, string][] = [];
+    if (this.endBonus) extras.push([`${t(`bonus_${this.endBonus.kind}` as TextKey)} ${rewardText(this.endBonus.reward)}`, THEME.accent]);
+    if (this.boostGain > 0) extras.push([fill(t('boostGain'), { metres: formatDistance(this.boostGain) }), '#7ddc7a']);
+    if (this.endNearMiss) extras.push([fill(t('nearMiss'), { metres: formatDistance(this.endNearMiss.metres), stage: stageName(this.endNearMiss.stageId) }), THEME.uiText]);
+    if (this.endChallenges > 0) extras.push([t('challengeDone'), '#7ddc7a']);
+    if (this.starterJustOffered) extras.push([t('starterOffer'), THEME.accent]);
+    const shown = extras.slice(0, 2);
+
     const panelW = Math.min(W - 32, 380);
     const panelX = (W - panelW) / 2;
     const panelY = H * 0.13;
     ctx.fillStyle = THEME.ui;
-    roundRect(ctx, panelX, panelY, panelW, 396, 20);
+    roundRect(ctx, panelX, panelY, panelW, 396 + shown.length * 20, 20);
     ctx.fill();
 
     const gender = this.save.profile.gender;
@@ -1246,20 +1474,26 @@ export class App implements PointerListener {
             : t('endAltitudeRecord');
       ctx.fillText(line, W / 2, panelY + 102, panelW - 24);
     }
+    shown.forEach(([text, colour], i) => {
+      ctx.fillStyle = colour;
+      ctx.font = font('display', 13);
+      ctx.fillText(text, W / 2, panelY + 124 + i * 20, panelW - 24);
+    });
 
     ctx.font = font('text', 15);
     const farthest = STAGES[run.maxStageIndex] ?? STAGES[0]!;
     const highest = LAYERS[run.maxLayerIndex] ?? LAYERS[0]!;
+    const multiplier = coinMultiplier(this.save, this.now);
     const rows: [string, string][] = [
       [t('endStage'), stageName(farthest.id)],
       [t('endAltitude'), formatAltitude(run.maxAltitude)],
       [t('endLayer'), layerName(highest.id)],
       [t('endSpeed'), `${formatSpeedKmh(run.maxSpeed)} ${t('speedUnit')}`],
-      [t('coinsRun'), `+${run.coins + run.distanceCoins} ●`],
+      [t('coinsRun'), `+${(run.coins + run.distanceCoins) * multiplier} ●${multiplier > 1 ? ` (×${multiplier})` : ''}`],
       [t('xp'), `+${this.runXp}`],
       [t('best'), `${formatDistance(this.save.bestDistance)} · ${formatAltitude(this.save.bestAltitude)}`],
     ];
-    let y = panelY + 130;
+    let y = panelY + 130 + shown.length * 20;
     for (const [label, value] of rows) {
       ctx.textAlign = 'left';
       ctx.fillStyle = THEME.uiTextSoft;
@@ -1355,8 +1589,15 @@ export class App implements PointerListener {
   // ---- scrolling list screens ------------------------------------------------
 
   private listTitle(): string {
-    const key: TextKey = this.screen === 'customize' ? 'customize' : this.screen === 'trophies' ? 'trophies' : this.screen === 'profiles' ? 'profiles' : 'settings';
-    return t(key);
+    const keys: Partial<Record<Screen, TextKey>> = {
+      customize: 'customize',
+      trophies: 'trophies',
+      profiles: 'profiles',
+      settings: 'settings',
+      premium: 'premiumTitle',
+      challenges: 'challengesTitle',
+    };
+    return t(keys[this.screen] ?? 'settings');
   }
 
   private drawList(): void {
@@ -1382,7 +1623,13 @@ export class App implements PointerListener {
       ctx.textAlign = 'right';
       ctx.font = font('display', 16);
       ctx.fillStyle = THEME.accent;
-      ctx.fillText(`${this.save.trophies.length}/${TROPHIES.length} ${t('trophiesCount')}`, panelX + panelW - 12, 26);
+      ctx.fillText(`${this.save.trophies.length}/${TROPHIES.length} ${t('trophiesCount')}`, panelX + panelW - 12, 26 + this.insets.top);
+    }
+    if (this.screen === 'premium' || this.screen === 'challenges') {
+      ctx.textAlign = 'right';
+      ctx.font = font('display', 16);
+      ctx.fillStyle = THEME.accent;
+      ctx.fillText(`${this.save.coins} ●  ${this.save.premium.billets} 🎟`, panelX + panelW - 12, 26 + this.insets.top);
     }
 
     const top = this.contentTop();
@@ -1428,6 +1675,10 @@ export class App implements PointerListener {
         return this.layoutProfiles();
       case 'settings':
         return this.layoutSettings();
+      case 'premium':
+        return this.layoutPremium();
+      case 'challenges':
+        return this.layoutChallenges();
       default:
         return [];
     }
@@ -1783,6 +2034,484 @@ export class App implements PointerListener {
       }
     }
     return items;
+  }
+
+  // ---- premium shop -------------------------------------------------------------
+
+  /** One row of the premium list: title, detail, price on the right. */
+  private premiumRow(b: Button, title: string, detail: string, right: string, style: 'ready' | 'off' | 'done' | 'confirm'): void {
+    const ctx = this.ctx;
+    ctx.fillStyle =
+      style === 'done' ? 'rgba(255,197,49,0.25)' : style === 'off' ? 'rgba(255,255,255,0.06)' : style === 'confirm' ? 'rgba(230,57,70,0.35)' : 'rgba(42,157,143,0.45)';
+    roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+    ctx.fill();
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.font = font('display', 14);
+    ctx.fillStyle = style === 'off' ? THEME.uiTextSoft : THEME.uiText;
+    ctx.fillText(title, b.x + 12, b.y + b.h * 0.33, b.w - 120);
+    ctx.font = font('text', 11);
+    ctx.fillStyle = THEME.uiTextSoft;
+    ctx.fillText(detail, b.x + 12, b.y + b.h * 0.72, b.w - 120);
+    ctx.textAlign = 'right';
+    ctx.font = font('display', 14);
+    ctx.fillStyle = style === 'done' ? THEME.accent : style === 'off' ? THEME.uiTextSoft : THEME.uiText;
+    ctx.fillText(right, b.x + b.w - 12, b.y + b.h / 2);
+  }
+
+  private layoutPremium(): Item[] {
+    const W = this.width;
+    const panelW = Math.min(W - 24, 420);
+    const x0 = (W - panelW) / 2 + 12;
+    const cw = panelW - 24;
+    const items: Item[] = [];
+    const save = this.save;
+    const now = this.now;
+    const P = BALANCE.premium;
+    let y = 0;
+
+    // Notice line (payment result, cap) or the rule that protects the game.
+    items.push({
+      b: { x: x0, y, w: cw, h: 22 },
+      draw: (b) => {
+        const ctx = this.ctx;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        ctx.font = font('text', 12);
+        const notice = this.premiumNoticeTime > 0 ? this.premiumNotice : paymentsAvailable(this.tg) ? t('noRandomPaid') : t('paymentSoon');
+        ctx.fillStyle = this.premiumNoticeTime > 0 ? THEME.accent : THEME.uiTextSoft;
+        ctx.fillText(notice, b.x + 2, b.y + b.h / 2, b.w - 4);
+      },
+    });
+    y += 30;
+
+    /** A Stars product row: first tap arms it, the second confirms. */
+    const starsRow = (id: StarsProductId, title: string, detail: string, done: boolean, doneText: string): void => {
+      const price = starsPrice(id);
+      const confirming = this.confirmId === id;
+      items.push({
+        b: { x: x0, y, w: cw, h: 58 },
+        draw: (b) => this.premiumRow(b, title, confirming ? t('noRandomPaid') : detail, done ? doneText : confirming ? fill(t('confirm'), { price }) : `${price} ★`, done ? 'done' : confirming ? 'confirm' : 'ready'),
+        tap: () => {
+          if (done) return;
+          if (confirming) void this.purchase(id);
+          else {
+            this.confirmId = id;
+            track('purchase_view', { product: id, stars: price });
+          }
+        },
+      });
+      y += 64;
+    };
+
+    // Pass.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('pass')) });
+    y += 26;
+    const active = passActive(save, now);
+    const until = new Date(save.premium.passUntil);
+    starsRow(P.pass.id, `${t('pass')} · ${t('passDays')}`, t('passLine'), active, `${t('passActive')} ${until.getDate()}/${until.getMonth() + 1}`);
+
+    // Starter pack, only while it is offered.
+    if (starterAvailable(save, now)) {
+      items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('starter')) });
+      y += 26;
+      const left = Math.max(0, save.premium.starterOfferedAt + P.starter.hours * 3_600_000 - now) / 1000;
+      starsRow(
+        P.starter.id,
+        `${t('starter')} · ${fill(t('starterLeft'), { time: formatCooldown(left) })}`,
+        fill(t('starterLine'), { billets: P.starter.billets, coins: P.starter.coinsBase + P.starter.coinsPerLevel * save.level }),
+        false,
+        '',
+      );
+    }
+
+    // Billets in Stars.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('billetPacks')) });
+    y += 26;
+    for (const pack of P.billetPacks) {
+      starsRow(pack.id, fill(t('billetPack'), { billets: pack.billets }), pack.bonus > 0 ? fill(t('billetBonus'), { bonus: pack.bonus }) : '', false, '');
+    }
+
+    // Coins in billets.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('coinPacks')) });
+    y += 26;
+    for (const pack of P.coinPacks) {
+      const coins = coinPackAmount(pack, save.level);
+      const ok = save.premium.billets >= pack.billets;
+      items.push({
+        b: { x: x0, y, w: cw, h: 52 },
+        draw: (b) => this.premiumRow(b, fill(t('coinPack'), { coins }), '', `${pack.billets} 🎟`, ok ? 'ready' : 'off'),
+        tap: () => {
+          if (!buyCoinPack(save, pack)) {
+            this.premiumMessage(t('notEnoughBillets'));
+            return;
+          }
+          this.afterPurchase('coins', pack.id);
+        },
+      });
+      y += 58;
+    }
+
+    // Time accelerator.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('accelerator')) });
+    y += 26;
+    const next = nextTimeScaleUnlock(save, now);
+    items.push({
+      b: { x: x0, y, w: cw, h: 52 },
+      draw: (b) => {
+        if (!next) {
+          this.premiumRow(b, `×${BALANCE.timeScale.steps[maxTimeScaleIndex(save, now)]}`, t('acceleratorAll'), t('maxed'), 'done');
+          return;
+        }
+        const step = BALANCE.timeScale.steps[next.index] ?? 1;
+        const ok = next.billets > 0 && save.premium.billets >= next.billets;
+        this.premiumRow(b, fill(t('acceleratorNext'), { step, level: next.level }), next.billets > 0 ? fill(t('acceleratorBuy'), { billets: next.billets }) : '', next.billets > 0 ? `${next.billets} 🎟` : `${t('locked')} ${next.level}`, ok ? 'ready' : 'off');
+      },
+      tap: () => {
+        if (!next || next.billets <= 0) return;
+        if (!buyTimeScale(save, now)) {
+          this.premiumMessage(t('notEnoughBillets'));
+          return;
+        }
+        this.afterPurchase('timeScale', `x${BALANCE.timeScale.steps[next.index]}`);
+      },
+    });
+    y += 58;
+
+    // Gadgets: one row each, two prices.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('gadgets')) });
+    y += 26;
+    for (const g of P.gadgets) {
+      const held = save.premium.gadgets[g.id];
+      const rowY = y;
+      items.push({
+        b: { x: x0, y: rowY, w: cw, h: 64 },
+        draw: (b) => {
+          const ctx = this.ctx;
+          ctx.fillStyle = held > 0 ? 'rgba(255,197,49,0.18)' : 'rgba(255,255,255,0.08)';
+          roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+          ctx.fill();
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.font = font('display', 14);
+          ctx.fillStyle = THEME.uiText;
+          ctx.fillText(`${t(`gadget_${g.id}` as TextKey)}${held > 0 ? ` · ${held} ${t('held')}` : ''}`, b.x + 12, b.y + 16, b.w - 24);
+          ctx.font = font('text', 11);
+          ctx.fillStyle = THEME.uiTextSoft;
+          ctx.fillText(t(`gfx_${g.id}` as TextKey), b.x + 12, b.y + 34, b.w - 24);
+        },
+      });
+      const chipW = 84;
+      const chip = (dx: number, label: string, ok: boolean, currency: 'coins' | 'billets'): void => {
+        items.push({
+          b: { x: x0 + cw - dx, y: rowY + 44, w: chipW, h: 18 },
+          draw: (b) => this.chip({ x: b.x, y: b.y - 2, w: b.w, h: 22 }, label, ok, 11),
+          tap: () => {
+            const id = g.id as GadgetId;
+            if (!buyGadget(save, id, currency)) {
+              this.premiumMessage(currency === 'coins' ? t('notEnoughCoins') : t('notEnoughBillets'));
+              return;
+            }
+            this.afterPurchase('gadget', id);
+          },
+        });
+      };
+      chip(chipW * 2 + 8, `${g.coins} ●`, save.coins >= g.coins && held < P.gadgetMax, 'coins');
+      chip(chipW, `${g.billets} 🎟`, save.premium.billets >= g.billets && held < P.gadgetMax, 'billets');
+      y += 70;
+    }
+    return items;
+  }
+
+  /** Bookkeeping shared by every purchase: equipment, boost window, trophies, feedback. */
+  private afterPurchase(kind: string, id: string): void {
+    if (kind !== 'coins') startBoostWindow(this.save);
+    this.applyEquipment();
+    this.syncAimedRun();
+    awardTrophies(this.save);
+    this.sounds.play('buy');
+    this.buzz('buy');
+    this.confirmId = null;
+    this.relayout = true;
+    track('purchase', { kind, product: id, level: this.save.level });
+    this.persist();
+  }
+
+  /** Stars purchase: cap check, invoice through the server, grant on "paid". */
+  private async purchase(id: StarsProductId): Promise<void> {
+    if (this.buying) return;
+    const price = starsPrice(id);
+    if (price > starsLeftToday(this.save, this.now)) {
+      this.premiumMessage(fill(t('dailyCap'), { cap: BALANCE.premium.dailyStarsCap }));
+      this.confirmId = null;
+      this.relayout = true;
+      return;
+    }
+    if (!paymentsAvailable(this.tg)) {
+      this.premiumMessage(t('paymentSoon'));
+      this.confirmId = null;
+      this.relayout = true;
+      track('purchase_unavailable', { product: id, stars: price });
+      return;
+    }
+    this.buying = true;
+    const result = await requestPurchase(this.tg, id);
+    this.buying = false;
+    if (result === 'paid') {
+      grantStarsProduct(this.save, id, Date.now());
+      this.premiumMessage(t('paymentDone'));
+      this.afterPurchase('stars', id);
+      return;
+    }
+    this.premiumMessage(result === 'cancelled' ? t('paymentCancelled') : t('paymentFailed'));
+    this.confirmId = null;
+    this.relayout = true;
+    track('purchase_abandoned', { product: id, result });
+  }
+
+  // ---- challenges and streak ----------------------------------------------------------
+
+  private challengeText(kind: string, target: number): string {
+    const value = kind === 'distance' ? formatDistance(target) : kind === 'altitude' ? formatAltitude(target) : String(target);
+    return fill(t(`ch_${kind}` as TextKey), { target: value });
+  }
+
+  private layoutChallenges(): Item[] {
+    const W = this.width;
+    const panelW = Math.min(W - 24, 420);
+    const x0 = (W - panelW) / 2 + 12;
+    const cw = panelW - 24;
+    const items: Item[] = [];
+    const save = this.save;
+    let y = 0;
+
+    // Streak: seven chips, today's lit.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, `${t('streak')} · ${fill(t('streakDay'), { day: save.daily.streakDay })}`) });
+    y += 28;
+    const days = BALANCE.streak.coinsBase.length;
+    const sw = (cw - (days - 1) * 4) / days;
+    for (let i = 0; i < days; i++) {
+      items.push({
+        b: { x: x0 + i * (sw + 4), y, w: sw, h: 44 },
+        draw: (b) => {
+          const ctx = this.ctx;
+          const lit = i < save.daily.streakDay;
+          ctx.fillStyle = lit ? THEME.accent : 'rgba(255,255,255,0.1)';
+          roundRect(ctx, b.x, b.y, b.w, b.h, 8);
+          ctx.fill();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.font = font('display', 11);
+          ctx.fillStyle = lit ? THEME.ui : THEME.uiText;
+          ctx.fillText(`J${i + 1}`, b.x + b.w / 2, b.y + 12);
+          ctx.font = font('text', 9);
+          const r = { coins: BALANCE.streak.coinsBase[i] ?? 0, billets: BALANCE.streak.billets[i] ?? 0 };
+          ctx.fillText(r.billets > 0 ? `${r.billets} 🎟` : `${r.coins} ●`, b.x + b.w / 2, b.y + 30, b.w - 2);
+        },
+      });
+    }
+    y += 60;
+
+    // Today's challenges.
+    items.push({ b: { x: x0, y, w: cw, h: 24 }, draw: (b) => this.sectionLabel(b, t('challengesTitle')) });
+    y += 28;
+    const list = dailyChallenges(save.daily.challengeDay, save);
+    list.forEach((c, i) => {
+      const progress = save.daily.challengeProgress[i] ?? 0;
+      const done = progress >= c.target;
+      const claimed = save.daily.challengeClaimed[i] === true;
+      items.push({
+        b: { x: x0, y, w: cw, h: 66 },
+        draw: (b) => {
+          const ctx = this.ctx;
+          ctx.fillStyle = claimed ? 'rgba(255,197,49,0.18)' : done ? 'rgba(42,157,143,0.45)' : 'rgba(255,255,255,0.08)';
+          roundRect(ctx, b.x, b.y, b.w, b.h, 12);
+          ctx.fill();
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'left';
+          ctx.font = font('display', 13);
+          ctx.fillStyle = THEME.uiText;
+          ctx.fillText(this.challengeText(c.kind, c.target), b.x + 12, b.y + 16, b.w - 120);
+          ctx.textAlign = 'right';
+          ctx.fillStyle = THEME.accent;
+          ctx.fillText(claimed ? t('claimed') : done ? t('claim') : rewardText(c.reward), b.x + b.w - 12, b.y + 16);
+          const ratio = Math.min(1, c.target > 0 ? progress / c.target : 0);
+          ctx.fillStyle = 'rgba(255,255,255,0.12)';
+          roundRect(ctx, b.x + 12, b.y + 36, b.w - 24, 8, 4);
+          ctx.fill();
+          ctx.fillStyle = done ? THEME.accent : '#2a9d8f';
+          roundRect(ctx, b.x + 12, b.y + 36, Math.max(8, (b.w - 24) * ratio), 8, 4);
+          ctx.fill();
+          ctx.textAlign = 'left';
+          ctx.font = font('text', 10);
+          ctx.fillStyle = THEME.uiTextSoft;
+          const fmt = (v: number): string => (c.kind === 'distance' ? formatDistance(v) : c.kind === 'altitude' ? formatAltitude(v) : String(v));
+          ctx.fillText(`${fmt(Math.min(progress, c.target))} / ${fmt(c.target)}`, b.x + 12, b.y + 54, b.w - 24);
+        },
+        tap: () => {
+          const reward = claimChallenge(save, i);
+          if (!reward) return;
+          awardTrophies(save);
+          this.sounds.play('trophy');
+          this.buzz('buy');
+          track('challenge_claim', { kind: c.kind, coins: reward.coins, billets: reward.billets });
+          this.persist();
+        },
+      });
+      y += 72;
+    });
+    return items;
+  }
+
+  // ---- daily wheel -----------------------------------------------------------------------
+
+  private openWheel(): void {
+    this.screen = 'wheel';
+    this.wheelSpinning = false;
+    this.wheelResult = -1;
+    this.wheelPrize = null;
+    this.confetti.clear();
+    track('wheel_open', { available: wheelAvailable(this.save, this.now) });
+  }
+
+  private spin(): void {
+    if (this.wheelSpinning) return;
+    const result = spinWheel(this.save, this.now, new Rng(newSeed()));
+    if (!result) return;
+    const n = BALANCE.wheel.segments.length;
+    const seg = (Math.PI * 2) / n;
+    // The pointer sits at the top; the wheel turns until the chosen segment's centre is under it.
+    const target = -(result.index + 0.5) * seg;
+    const current = this.wheelAngle % (Math.PI * 2);
+    this.wheelFrom = current;
+    this.wheelTo = current + BALANCE.wheel.turns * Math.PI * 2 + ((target - current) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+    this.wheelTime = 0;
+    this.wheelSpinning = true;
+    this.wheelResult = result.index;
+    this.wheelPrize = result.reward;
+    this.wheelTick = 0;
+    track('wheel_spin', { segment: result.index, coins: result.reward.coins, billets: result.reward.billets });
+    this.persist();
+  }
+
+  private updateWheel(dt: number): void {
+    this.confetti.update(dt);
+    if (!this.wheelSpinning) return;
+    const T = BALANCE.wheel.spinSeconds;
+    this.wheelTime = Math.min(T, this.wheelTime + dt);
+    const k = this.wheelTime / T;
+    const eased = 1 - Math.pow(1 - k, 3);
+    this.wheelAngle = this.wheelFrom + (this.wheelTo - this.wheelFrom) * eased;
+    // A tick each time a segment edge passes the pointer.
+    const n = BALANCE.wheel.segments.length;
+    const tick = Math.floor((this.wheelAngle / (Math.PI * 2)) * n);
+    if (tick !== this.wheelTick) {
+      this.wheelTick = tick;
+      this.sounds.play('tap');
+    }
+    if (this.wheelTime >= T) {
+      this.wheelSpinning = false;
+      const jackpot = this.wheelResult >= BALANCE.wheel.jackpotFrom;
+      this.sounds.play(jackpot ? 'record' : 'trophy');
+      this.buzz(jackpot ? 'record' : 'buy');
+      awardTrophies(this.save);
+      this.persist();
+      const cx = this.width / 2;
+      const cy = this.wheelCentreY();
+      const bursts = jackpot ? 6 : 2;
+      for (let i = 0; i < bursts; i++) this.confetti.burst((cx + (i - bursts / 2) * 30) / 10, -cy / 10, 12, i * 3);
+    }
+  }
+
+  private wheelCentreY(): number {
+    return this.insets.top + 90 + Math.min(this.width * 0.42, (this.spinButton.y - this.insets.top - 120) / 2);
+  }
+
+  private drawWheel(): void {
+    const ctx = this.ctx;
+    const W = this.width;
+    const H = this.height;
+    ctx.fillStyle = THEME.ui;
+    ctx.fillRect(0, 0, W, H);
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.font = font('display', 26);
+    ctx.fillStyle = THEME.uiText;
+    const panelW = Math.min(W - 24, 420);
+    const panelX = (W - panelW) / 2;
+    ctx.fillText(t('wheelTitle'), panelX + 12, 18 + this.insets.top);
+    ctx.textAlign = 'right';
+    ctx.font = font('display', 16);
+    ctx.fillStyle = THEME.accent;
+    ctx.fillText(`${this.save.coins} ●  ${this.save.premium.billets} 🎟`, panelX + panelW - 12, 26 + this.insets.top);
+
+    const segments = BALANCE.wheel.segments;
+    const n = segments.length;
+    const seg = (Math.PI * 2) / n;
+    const cx = W / 2;
+    const cy = this.wheelCentreY();
+    const r = Math.min(W * 0.42, (this.spinButton.y - this.insets.top - 120) / 2);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(this.wheelAngle - Math.PI / 2);
+    for (let i = 0; i < n; i++) {
+      const s = segments[i]!;
+      const jackpot = i >= BALANCE.wheel.jackpotFrom;
+      ctx.fillStyle = jackpot ? THEME.accent : s.billets > 0 ? '#2a9d8f' : i % 2 === 0 ? '#2b2f45' : '#3a3f5c';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, r, i * seg, (i + 1) * seg);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = THEME.ui;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.save();
+      ctx.rotate((i + 0.5) * seg);
+      ctx.translate(r * 0.62, 0);
+      ctx.rotate(Math.PI / 2);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = font('display', jackpot ? 13 : 12);
+      ctx.fillStyle = jackpot ? THEME.ui : THEME.uiText;
+      const reward = wheelReward(s, this.save.level);
+      ctx.fillText(reward.billets > 0 ? `${reward.billets} 🎟` : `${reward.coins} ●`, 0, 0);
+      ctx.restore();
+    }
+    ctx.restore();
+    // hub and pointer
+    ctx.fillStyle = THEME.ui;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = THEME.accent;
+    ctx.beginPath();
+    ctx.moveTo(cx - 14, cy - r - 14);
+    ctx.lineTo(cx + 14, cy - r - 14);
+    ctx.lineTo(cx, cy - r + 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = THEME.outline;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    this.confetti.draw(ctx, 0, 0, 10);
+
+    // Result.
+    if (!this.wheelSpinning && this.wheelPrize) {
+      const jackpot = this.wheelResult >= BALANCE.wheel.jackpotFrom;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = font('display', jackpot ? 30 : 22);
+      ctx.fillStyle = THEME.accent;
+      ctx.fillText(jackpot ? t('jackpot') : t('youWin'), cx, cy + r + 44);
+      ctx.font = font('display', 22);
+      ctx.fillStyle = THEME.uiText;
+      ctx.fillText(rewardText(this.wheelPrize), cx, cy + r + 76);
+    }
+    const ready = wheelAvailable(this.save, this.now) && !this.wheelSpinning;
+    this.button(this.spinButton, this.wheelSpinning ? t('spinning') : ready ? t('spin') : t('spinTomorrow'), ready ? 'primary' : 'disabled', 22);
+    this.button(this.backButton, t('back'), this.wheelSpinning ? 'disabled' : 'secondary', 18);
   }
 
   private wrapText(text: string, x: number, y: number, maxWidth: number, lineHeight: number): void {

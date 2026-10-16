@@ -213,7 +213,8 @@ export class Run {
     return true;
   }
 
-  cycleTimeScale(maxIndex: number = BALANCE.timeScale.freeMaxIndex): void {
+  /** Next accelerator step, back to ×1 past `maxIndex` (what the level, the pass or a purchase allows). */
+  cycleTimeScale(maxIndex: number = BALANCE.timeScale.steps.length - 1): void {
     this.timeScaleIndex = this.timeScaleIndex >= maxIndex ? 0 : this.timeScaleIndex + 1;
   }
 

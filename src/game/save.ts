@@ -21,6 +21,55 @@ export interface Settings {
   lang: 'fr' | 'en';
 }
 
+export type GadgetId = (typeof BALANCE.premium.gadgets)[number]['id'];
+export const GADGET_IDS = BALANCE.premium.gadgets.map((g) => g.id) as GadgetId[];
+
+/** Premium currency, pass, gadgets and the spending guard. Server-reconciled once payments are live. */
+export interface Premium {
+  billets: number;
+  /** Billets ever received, for the dashboard. */
+  totalBillets: number;
+  /** Highest time accelerator index bought, 0 when none. */
+  timeScaleOwned: number;
+  /** Pass expiry (ms), 0 when none. */
+  passUntil: number;
+  /** One-run gadgets held, per kind. */
+  gadgets: Record<GadgetId, number>;
+  /** Starter pack: when it was first offered (ms, 0 = not yet) and whether it was bought. */
+  starterOfferedAt: number;
+  starterBought: boolean;
+  /** Stars spent on the day `spendDay` (local day index). */
+  spendDay: number;
+  spendStars: number;
+  /** Number of Stars purchases made. */
+  purchases: number;
+}
+
+/** Daily loops: login streak, free wheel, challenges. Days are local day indices (days since epoch). */
+export interface Daily {
+  /** Current streak day (1..7), 0 before the first visit. */
+  streakDay: number;
+  streakLastDay: number;
+  /** Last day the wheel was spun, 0 when never. */
+  wheelDay: number;
+  challengeDay: number;
+  challengeProgress: number[];
+  challengeClaimed: boolean[];
+}
+
+/** What the anti-churn rules look at. */
+export interface Retention {
+  /** Last time the game was open (ms). */
+  lastSeen: number;
+  /** Runs in a row without real progress. */
+  stallRuns: number;
+  /** Last run distances, newest last. */
+  recent: number[];
+  /** Runs left during which the end screen shows the gain since the last purchase, and the average before it. */
+  boostRuns: number;
+  boostBaseline: number;
+}
+
 /** Persistent progression. Versioned so future updates can migrate old saves. */
 export interface SaveData {
   version: number;
@@ -42,6 +91,38 @@ export interface SaveData {
   trophies: string[];
   stats: Stats;
   settings: Settings;
+  premium: Premium;
+  daily: Daily;
+  retention: Retention;
+}
+
+export function defaultGadgets(): Record<GadgetId, number> {
+  const g = {} as Record<GadgetId, number>;
+  for (const id of GADGET_IDS) g[id] = 0;
+  return g;
+}
+
+export function defaultPremium(): Premium {
+  return {
+    billets: 0,
+    totalBillets: 0,
+    timeScaleOwned: 0,
+    passUntil: 0,
+    gadgets: defaultGadgets(),
+    starterOfferedAt: 0,
+    starterBought: false,
+    spendDay: 0,
+    spendStars: 0,
+    purchases: 0,
+  };
+}
+
+export function defaultDaily(): Daily {
+  return { streakDay: 0, streakLastDay: 0, wheelDay: 0, challengeDay: 0, challengeProgress: [], challengeClaimed: [] };
+}
+
+export function defaultRetention(): Retention {
+  return { lastSeen: 0, stallRuns: 0, recent: [], boostRuns: 0, boostBaseline: 0 };
 }
 
 export function defaultProfile(): Profile {
@@ -85,6 +166,9 @@ export function defaultSave(): SaveData {
     trophies: [],
     stats: defaultStats(),
     settings: defaultSettings(),
+    premium: defaultPremium(),
+    daily: defaultDaily(),
+    retention: defaultRetention(),
   };
 }
 
@@ -119,7 +203,16 @@ export function migrate(raw: unknown): SaveData {
   for (const id of UPGRADE_IDS) upgrades[id] = Math.min(BALANCE.upgrades[id].levels, Math.floor(num(ru[id])));
   const rs = (r.stats ?? {}) as Partial<Stats>;
   const rset = (r.settings ?? {}) as Partial<Settings>;
+  const rp = (r.premium ?? {}) as Partial<Premium>;
+  const rd = (r.daily ?? {}) as Partial<Daily>;
+  const rr = (r.retention ?? {}) as Partial<Retention>;
   const knownTrophies = new Set<string>(BALANCE.trophies.map((t) => t.id));
+  const gadgets = defaultGadgets();
+  const rg = (rp.gadgets ?? {}) as Partial<Record<GadgetId, unknown>>;
+  for (const id of GADGET_IDS) gadgets[id] = Math.min(BALANCE.premium.gadgetMax, Math.floor(num(rg[id])));
+  const numbers = (v: unknown, max: number): number[] =>
+    Array.isArray(v) ? v.slice(0, max).map((x) => Math.floor(num(x))) : [];
+  const flags = (v: unknown, max: number): boolean[] => (Array.isArray(v) ? v.slice(0, max).map((x) => x === true) : []);
   return {
     version: BALANCE.save.schemaVersion,
     bestDistance: num(r.bestDistance),
@@ -144,6 +237,33 @@ export function migrate(raw: unknown): SaveData {
       sound: rset.sound !== false,
       haptics: rset.haptics !== false,
       lang: rset.lang === 'en' ? 'en' : 'fr',
+    },
+    premium: {
+      billets: Math.floor(num(rp.billets)),
+      totalBillets: Math.floor(Math.max(num(rp.totalBillets), num(rp.billets))),
+      timeScaleOwned: Math.min(BALANCE.timeScale.steps.length - 1, Math.floor(num(rp.timeScaleOwned))),
+      passUntil: Math.floor(num(rp.passUntil)),
+      gadgets,
+      starterOfferedAt: Math.floor(num(rp.starterOfferedAt)),
+      starterBought: rp.starterBought === true,
+      spendDay: Math.floor(num(rp.spendDay)),
+      spendStars: Math.floor(num(rp.spendStars)),
+      purchases: Math.floor(num(rp.purchases)),
+    },
+    daily: {
+      streakDay: Math.min(BALANCE.streak.coinsBase.length, Math.floor(num(rd.streakDay))),
+      streakLastDay: Math.floor(num(rd.streakLastDay)),
+      wheelDay: Math.floor(num(rd.wheelDay)),
+      challengeDay: Math.floor(num(rd.challengeDay)),
+      challengeProgress: numbers(rd.challengeProgress, BALANCE.challenges.perDay),
+      challengeClaimed: flags(rd.challengeClaimed, BALANCE.challenges.perDay),
+    },
+    retention: {
+      lastSeen: Math.floor(num(rr.lastSeen)),
+      stallRuns: Math.floor(num(rr.stallRuns)),
+      recent: Array.isArray(rr.recent) ? rr.recent.slice(-BALANCE.premium.recentRuns).map((x) => num(x)) : [],
+      boostRuns: Math.floor(num(rr.boostRuns)),
+      boostBaseline: num(rr.boostBaseline),
     },
   };
 }
