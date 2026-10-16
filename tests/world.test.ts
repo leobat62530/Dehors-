@@ -45,20 +45,20 @@ describe('ground track', () => {
 
   it('picks the country from the distance only', () => {
     expect(stageAt(0).id).toBe('arras');
-    expect(stageAt(499).id).toBe('arras');
-    expect(stageAt(500).id).toBe('somme');
+    expect(stageAt(399).id).toBe('arras');
+    expect(stageAt(400).id).toBe('somme');
     expect(stageAt(2_000).id).toBe('paris');
-    expect(stageAt(7_999).id).toBe('paris');
-    expect(stageAt(150_000).id).toBe('pyrenees');
-    expect(stageAt(9_999_999).id).toBe('nigeria');
-    expect(stageAt(10_000_000).id).toBe('desert');
+    expect(stageAt(2_499).id).toBe('paris');
+    expect(stageAt(30_000).id).toBe('pyrenees');
+    expect(stageAt(244_999).id).toBe('nigeria');
+    expect(stageAt(245_000).id).toBe('desert');
     expect(stageAt(1e12).id).toBe('desert');
     expect(stageIndexAt(-5)).toBe(0);
   });
 
   it('the final desert never ends', () => {
     expect(distanceToNextBorder(10_000_000)).toBe(Number.POSITIVE_INFINITY);
-    expect(distanceToNextBorder(100)).toBe(400);
+    expect(distanceToNextBorder(100)).toBe(300);
   });
 });
 
@@ -152,8 +152,8 @@ describe('wind', () => {
       return b.x - x0;
     };
     const calm = fly(0); // Arras, no wind
-    const head = fly(150_000); // Pyrenees, headwind
-    const tail = fly(600_000); // Mediterranean, tailwind
+    const head = fly(30_000); // Pyrenees, headwind
+    const tail = fly(70_000); // Mediterranean, tailwind
     expect(head).toBeLessThan(calm);
     expect(tail).toBeGreaterThan(calm);
   });

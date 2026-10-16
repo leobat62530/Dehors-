@@ -44,9 +44,11 @@ describe('xp and levels', () => {
 
 describe('shop', () => {
   it('prices grow by the table multiplier', () => {
-    expect(upgradePrice('force', 0)).toBe(50);
-    expect(upgradePrice('force', 1)).toBe(90);
-    expect(upgradePrice('avocat', 2)).toBe(1500 * 9);
+    const F = BALANCE.upgrades.force;
+    const A = BALANCE.upgrades.avocat;
+    expect(upgradePrice('force', 0)).toBe(F.price);
+    expect(upgradePrice('force', 1)).toBe(Math.round(F.price * F.growth));
+    expect(upgradePrice('avocat', 2)).toBe(Math.round(A.price * A.growth * A.growth));
   });
 
   it('the free gift comes back every 4 hours and never blocks', () => {

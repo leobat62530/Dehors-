@@ -1,5 +1,7 @@
+import { flush, setAnalyticsSink } from './core/analytics';
 import { attachPointer } from './core/input';
 import { FixedStepper, startAnimationLoop } from './core/loop';
+import { createEventSink } from './telegram/payments';
 import { createCloudStore, initTelegram, shareViaTelegram, telegram } from './telegram/webapp';
 import { THEME } from './theme/theme';
 import { App } from './ui/app';
@@ -21,6 +23,11 @@ async function main(): Promise<void> {
   const tg = telegram();
   const insets = tg ? initTelegram(tg, THEME.ui) : { top: 0, bottom: 0 };
   if (tg) setShareHandler((text) => shareViaTelegram(tg, text));
+  // Anonymous events leave in batches; the last batch goes when the app is hidden.
+  setAnalyticsSink(createEventSink(tg));
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) flush();
+  });
   const store = await createCloudStore(tg, storage());
 
   const app = new App(canvas, store, { telegram: tg, insets });

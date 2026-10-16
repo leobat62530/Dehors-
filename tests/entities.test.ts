@@ -121,13 +121,15 @@ describe('spawning', () => {
 });
 
 describe('distance coins', () => {
-  it('pays one coin per 20 m up to 2 km, then sub-linearly', async () => {
+  it('pays one coin every distanceCoinEvery metres up to linearUntil, then sub-linearly', async () => {
     const { distanceCoins } = await import('../src/config/balance');
+    const { distanceCoinEvery: every, linearUntil } = BALANCE.economy;
+    const linear = linearUntil / every;
     expect(distanceCoins(0)).toBe(0);
-    expect(distanceCoins(459)).toBe(22);
-    expect(distanceCoins(2_000)).toBe(100);
-    expect(distanceCoins(4_000)).toBeLessThan(200);
-    expect(distanceCoins(4_000)).toBeGreaterThan(100);
+    expect(distanceCoins(459)).toBe(Math.floor(459 / every));
+    expect(distanceCoins(linearUntil)).toBe(linear);
+    expect(distanceCoins(2 * linearUntil)).toBeLessThan(2 * linear);
+    expect(distanceCoins(2 * linearUntil)).toBeGreaterThan(linear);
     expect(distanceCoins(10_000_000)).toBeGreaterThan(distanceCoins(1_000_000));
   });
 });

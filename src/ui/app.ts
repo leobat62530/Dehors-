@@ -70,7 +70,7 @@ import {
   upgradeEffect,
   upgradeName,
 } from './i18n';
-import { paymentsAvailable, requestPurchase } from '../telegram/payments';
+import { claimPurchases, paymentsAvailable, requestPurchase } from '../telegram/payments';
 import { haptic, type HapticKind, type Insets, type TelegramWebApp } from '../telegram/webapp';
 import { drawBanner, drawShockWave, Particles, Trail } from './fx';
 import { createOverlay, type Overlay } from './overlay';
@@ -366,6 +366,21 @@ export class App implements PointerListener {
     this.nextDailyCheck = now + 60_000;
     track('session_start', { level: this.save.level, runs: this.save.runs, streak: this.save.daily.streakDay, pass: passActive(this.save, now) });
     this.persist();
+    void this.claimPending().then((n) => {
+      if (n > 0) this.notice(t('paymentDone'), 6);
+    });
+  }
+
+  /** Credit the purchases the server holds for this player (paid while the game was closed, or just now). */
+  private async claimPending(): Promise<number> {
+    const products = await claimPurchases(this.tg);
+    for (const id of products) grantStarsProduct(this.save, id, Date.now());
+    if (products.length > 0) {
+      this.applyEquipment();
+      this.relayout = true;
+      this.persist();
+    }
+    return products.length;
   }
 
   private notice(text: string, seconds: number): void {
@@ -2258,7 +2273,12 @@ export class App implements PointerListener {
     const result = await requestPurchase(this.tg, id);
     this.buying = false;
     if (result === 'paid') {
-      grantStarsProduct(this.save, id, Date.now());
+      // The server is the ledger: credit what it confirms, which includes this payment.
+      const granted = await this.claimPending();
+      if (granted === 0) {
+        // The webhook can lag a moment behind the "paid" status: credit this one anyway.
+        grantStarsProduct(this.save, id, Date.now());
+      }
       this.premiumMessage(t('paymentDone'));
       this.afterPurchase('stars', id);
       return;
