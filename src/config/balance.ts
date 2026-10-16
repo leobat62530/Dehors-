@@ -40,9 +40,9 @@ export const BALANCE = {
   kick: {
     /** Launch speed range for power 0..1 (m/s). */
     minSpeed: 28,
-    maxSpeed: 95,
+    maxSpeed: 105,
     /** Multiplier per "Force du coup" level. */
-    speedPerLevel: 1.09,
+    speedPerLevel: 1.1,
     /** Launch angle bounds (degrees). */
     minAngle: 15,
     maxAngle: 75,
@@ -61,7 +61,7 @@ export const BALANCE = {
   physics: {
     gravity: 22,
     /** Quadratic drag: a = -k · v · |v|. */
-    dragK: 0.0012,
+    dragK: 0.0009,
     /** Ground bounce: vertical restitution and horizontal friction kept per bounce. */
     restitution: 0.55,
     bounceFriction: 0.9,
@@ -139,22 +139,22 @@ export const BALANCE = {
    */
   stages: [
     { id: 'arras', from: 0, wind: 0 },
-    { id: 'somme', from: 500, wind: -3 },
-    { id: 'paris', from: 2_000, wind: 0 },
-    { id: 'campagne', from: 8_000, wind: -2 },
-    { id: 'lyon', from: 25_000, wind: -3 },
-    { id: 'marseille', from: 70_000, wind: 2 },
-    { id: 'pyrenees', from: 150_000, wind: -8 },
-    { id: 'espagne', from: 300_000, wind: -4 },
-    { id: 'mediterranee', from: 600_000, wind: 6 },
-    { id: 'maroc', from: 900_000, wind: -5 },
-    { id: 'algerie', from: 1_400_000, wind: -6 },
-    { id: 'tunisie', from: 2_000_000, wind: -5 },
-    { id: 'soudan', from: 2_800_000, wind: -10 },
-    { id: 'somalie', from: 4_000_000, wind: -8 },
-    { id: 'congo', from: 5_500_000, wind: -4 },
-    { id: 'nigeria', from: 7_500_000, wind: -14 },
-    { id: 'desert', from: 10_000_000, wind: -9 },
+    { id: 'somme', from: 400, wind: -3 },
+    { id: 'paris', from: 900, wind: 0 },
+    { id: 'campagne', from: 2_500, wind: -2 },
+    { id: 'lyon', from: 6_000, wind: -3 },
+    { id: 'marseille', from: 15_000, wind: 2 },
+    { id: 'pyrenees', from: 30_000, wind: -8 },
+    { id: 'espagne', from: 45_000, wind: -4 },
+    { id: 'mediterranee', from: 70_000, wind: 6 },
+    { id: 'maroc', from: 125_000, wind: -5 },
+    { id: 'algerie', from: 135_000, wind: -6 },
+    { id: 'tunisie', from: 150_000, wind: -5 },
+    { id: 'soudan', from: 170_000, wind: -10 },
+    { id: 'somalie', from: 180_000, wind: -8 },
+    { id: 'congo', from: 200_000, wind: -4 },
+    { id: 'nigeria', from: 230_000, wind: -14 },
+    { id: 'desert', from: 245_000, wind: -9 },
   ],
 
   /** Sky layers. The layer depends on the altitude y only. `from` in metres. */
@@ -304,11 +304,11 @@ export const BALANCE = {
 
   economy: {
     /** One coin every this many metres, linear until `linearUntil`, then sub-linear with `exponent`. */
-    distanceCoinEvery: 20,
+    distanceCoinEvery: 10,
     linearUntil: 2_000,
-    exponent: 0.6,
+    exponent: 0.75,
     /** Coin clusters in flight: clusters per 100 m, coins per cluster, face value growth per stage. */
-    clustersPer100m: 0.9,
+    clustersPer100m: 1.2,
     clusterMin: 3,
     clusterMax: 7,
     /** Face value of a coin = 1 + floor(stageIndex × valuePerStage). */
@@ -333,17 +333,17 @@ export const BALANCE = {
 
   /** Shop upgrades: effect per level, levels, start price, price multiplier per level, unlock level. */
   upgrades: {
-    force: { levels: 10, price: 50, growth: 1.8, unlock: 1 },
-    semelles: { levels: 8, price: 80, growth: 1.9, unlock: 2 },
-    combinaison: { levels: 8, price: 100, growth: 1.9, unlock: 3 },
-    aimant: { levels: 6, price: 120, growth: 2.0, unlock: 5 },
-    fusee: { levels: 4, price: 300, growth: 2.5, unlock: 6 },
+    force: { levels: 30, price: 30, growth: 1.35, unlock: 1 },
+    semelles: { levels: 8, price: 80, growth: 1.7, unlock: 2 },
+    combinaison: { levels: 16, price: 100, growth: 1.45, unlock: 2 },
+    aimant: { levels: 6, price: 120, growth: 1.8, unlock: 5 },
+    fusee: { levels: 4, price: 300, growth: 2.0, unlock: 6 },
     tremplin: { levels: 5, price: 500, growth: 2.2, unlock: 7 },
     avocat: { levels: 3, price: 1_500, growth: 3.0, unlock: 10 },
   },
   upgradeEffects: {
     /** Drag kept per "Combinaison" level. */
-    suitDragPerLevel: 0.93,
+    suitDragPerLevel: 0.9,
     /** Extra pickup radius per "Aimant" level (m). */
     magnetRadiusPerLevel: 0.5,
     /** Rocket: speed multiplier and no-drag seconds per charge. */

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Dehors ! — tableau de bord</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; padding: 16px; background: #1b1d2a; color: #fff; font: 15px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    h1 { font: 900 28px "Arial Black", Impact, sans-serif; color: #ffc531; margin: 0 0 12px; }
+    h2 { font-size: 16px; margin: 24px 0 8px; color: rgba(255,255,255,0.78); }
+    .cards { display: flex; flex-wrap: wrap; gap: 10px; }
+    .card { background: rgba(255,255,255,0.08); border-radius: 12px; padding: 12px 16px; min-width: 130px; }
+    .card b { display: block; font-size: 26px; color: #ffc531; }
+    table { border-collapse: collapse; width: 100%; max-width: 900px; font-size: 13px; }
+    th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    th:first-child, td:first-child { text-align: left; }
+    input { font: inherit; padding: 8px 12px; border-radius: 10px; border: 2px solid #ffc531; background: #1b1d2a; color: #fff; width: 260px; }
+    button { font: 700 15px system-ui, sans-serif; padding: 8px 16px; border-radius: 10px; border: 0; background: #ffc531; color: #1b1d2a; cursor: pointer; }
+    .bar { display: inline-block; height: 10px; background: #2a9d8f; border-radius: 5px; vertical-align: middle; }
+    #error { color: #e63946; }
+  </style>
+</head>
+<body>
+  <h1>Dehors ! — tableau de bord</h1>
+  <form id="login">
+    <input id="token" type="password" placeholder="Jeton du tableau de bord" autocomplete="off" />
+    <button type="submit">Ouvrir</button>
+    <span id="error"></span>
+  </form>
+  <div id="content" hidden>
+    <div class="cards">
+      <div class="card">Joueurs Telegram<b id="players">–</b></div>
+      <div class="card">Joueurs aujourd’hui<b id="today">–</b></div>
+      <div class="card">Parties aujourd’hui<b id="runs">–</b></div>
+      <div class="card">Stars (30 j)<b id="stars">–</b></div>
+    </div>
+    <h2>Par jour</h2>
+    <table id="daily"><thead><tr><th>Jour</th><th>Joueurs</th><th>Parties</th><th>Distance moy.</th><th>Durée moy. (s)</th><th>Boutique vue</th><th>Achat vu</th><th>Achats Stars</th><th>Bonus payés</th><th>Stars</th></tr></thead><tbody></tbody></table>
+    <h2>Où les parties s’arrêtent (7 jours)</h2>
+    <table id="stages"><tbody></tbody></table>
+    <h2>Derniers achats</h2>
+    <table id="purchases"><thead><tr><th>Date</th><th>Produit</th><th>Stars</th></tr></thead><tbody></tbody></table>
+  </div>
+  <script>
+    const API = 'https://ebkztcveldnlamymhcsu.supabase.co/functions/v1/api';
+    const STAGES = ['arras','somme','paris','campagne','lyon','marseille','pyrenees','espagne','mediterranee','maroc','algerie','tunisie','soudan','somalie','congo','nigeria','desert'];
+    const $ = (id) => document.getElementById(id);
+    const fmt = (n, d = 0) => (n == null ? '–' : Number(n).toLocaleString('fr-FR', { maximumFractionDigits: d }));
+    async function load(token) {
+      const res = await fetch(`${API}/stats`, { headers: { 'x-dashboard-token': token } });
+      if (!res.ok) throw new Error(res.status === 403 ? 'Jeton refusé' : `Erreur ${res.status}`);
+      const s = await res.json();
+      $('players').textContent = fmt(s.players);
+      const today = s.daily[0];
+      $('today').textContent = today ? fmt(today.players) : '0';
+      $('runs').textContent = today ? fmt(today.runs) : '0';
+      $('stars').textContent = fmt(Object.values(s.starsByDay).reduce((a, b) => a + b, 0));
+      const tb = $('daily').querySelector('tbody');
+      tb.innerHTML = '';
+      for (const d of s.daily) {
+        const day = String(d.day).slice(0, 10);
+        const tr = document.createElement('tr');
+        tr.innerHTML = [day, d.players, d.runs, fmt(d.avg_distance) + ' m', fmt(d.avg_run_seconds, 1), d.premium_opens, d.purchase_views, d.stars_purchases, d.bonuses, fmt(s.starsByDay[day] ?? 0)]
+          .map((v) => `<td>${v ?? 0}</td>`).join('');
+        tb.appendChild(tr);
+      }
+      const sb = $('stages').querySelector('tbody');
+      sb.innerHTML = '';
+      const max = Math.max(1, ...Object.values(s.runsByStage));
+      for (const id of STAGES) {
+        const n = s.runsByStage[id] ?? 0;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${id}</td><td><span class="bar" style="width:${Math.round((n / max) * 200)}px"></span> ${n}</td>`;
+        sb.appendChild(tr);
+      }
+      const pb = $('purchases').querySelector('tbody');
+      pb.innerHTML = '';
+      for (const p of s.purchases) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${String(p.created_at).slice(0, 16).replace('T', ' ')}</td><td>${p.product}</td><td>${p.stars}</td>`;
+        pb.appendChild(tr);
+      }
+      $('content').hidden = false;
+      $('login').hidden = true;
+    }
+    $('login').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token = $('token').value.trim();
+      $('error').textContent = '';
+      try {
+        await load(token);
+        sessionStorage.setItem('dehors.dashboard', token);
+      } catch (err) {
+        $('error').textContent = err.message;
+      }
+    });
+    const saved = sessionStorage.getItem('dehors.dashboard');
+    if (saved) load(saved).catch(() => sessionStorage.removeItem('dehors.dashboard'));
+  </script>
+</body>
+</html>
